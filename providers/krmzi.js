@@ -1,19 +1,20 @@
 /**
  * Krmizi / Qrmzi provider for Nuvio — STRICT 1080p ONLY Edition
- * Version: 1.3.3
+ * Version: 1.4.0
  *
- * v1.3.0: Dynamic season boundary detection.
- * v1.3.1: Fixed P.A.C.K.E.R unpacker radix handling.
- * v1.3.2: Fixed findExactEpisode S1 boundary check.
- * v1.3.3: Removed S3 fallback, added S0/S-1 rejection,
- *         fixed verifyEpisodePage S1 boundary check.
+ * v1.3.3: Removed S3 fallback, added S0/S-1 rejection.
+ * v1.4.0: TMDB-based season boundaries — fixes Turkish series
+ *         where site uses absolute episode numbering and site
+ *         ribbon markers are missing/wrong.
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.3.3";
+var VERSION = "1.4.0";
+var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
+var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
 var SITE_BASES = [
   "https://www.qrmzi.tv",
@@ -23,6 +24,9 @@ var SITE_BASES = [
 var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 var MAX_SERIES_PROBES = 6;
 var MAX_SERVERS = 8;
+
+// In-memory cache: tmdbId -> [cumulativeEpCountS1, cumulativeS1S2, ...]
+var seasonBoundariesCache = {};
 
 function log(key, value) {
   var suffix = value === undefined || value === null || value === "" ? "" : " " + String(value);
@@ -290,6 +294,61 @@ function findSeasonBoundaries(seriesHtml) {
   return boundaries;
 }
 
+/**
+ * v1.4.0 — Fetch season boundaries from TMDB API.
+ * Returns array where boundaries[i] = cumulative episode count
+ * through season (i+1). E.g. S1=18, S2=20 → [18, 38].
+ * Cached in-memory to avoid hammering TMDB.
+ */
+function getTmdbSeasonBoundaries(tmdbId) {
+  var cacheKey = String(tmdbId);
+  if (seasonBoundariesCache[cacheKey]) {
+    return Promise.resolve(seasonBoundariesCache[cacheKey]);
+  }
+
+  var showUrl = TMDB_API_BASE + "/tv/" + encodeURIComponent(tmdbId) +
+    "?api_key=" + TMDB_API_KEY + "&language=en-US";
+
+  return fetchJson(showUrl, "", "").then(function (showData) {
+    var seasons = (showData && showData.seasons) || [];
+    seasons = seasons.filter(function (s) {
+      return s && typeof s.season_number === "number" && s.season_number > 0;
+    });
+    seasons.sort(function (a, b) { return a.season_number - b.season_number; });
+
+    if (!seasons.length) return [];
+
+    var jobs = [];
+    for (var i = 0; i < seasons.length; i++) {
+      (function (seasonNum) {
+        var seasonUrl = TMDB_API_BASE + "/tv/" + encodeURIComponent(tmdbId) +
+          "/season/" + seasonNum + "?api_key=" + TMDB_API_KEY + "&language=en-US";
+        jobs.push(
+          fetchJson(seasonUrl, "", "").then(function (seasonData) {
+            var eps = seasonData && seasonData.episodes ? seasonData.episodes : [];
+            return eps.length;
+          }).catch(function () { return 0; })
+        );
+      })(seasons[i].season_number);
+    }
+
+    return Promise.all(jobs).then(function (counts) {
+      var boundaries = [];
+      var cumulative = 0;
+      for (var j = 0; j < counts.length; j++) {
+        cumulative += counts[j];
+        boundaries.push(cumulative);
+      }
+      log("tmdb_boundaries_cached", boundaries.join(","));
+      seasonBoundariesCache[cacheKey] = boundaries;
+      return boundaries;
+    });
+  }).catch(function (error) {
+    logFailure("tmdb_boundaries_failed", errorMessage(error));
+    return [];
+  });
+}
+
 function siteEpisodeNumber(wantedSeason, wantedEpisode, boundaries) {
   if (wantedSeason <= 1) return wantedEpisode;
 
@@ -312,9 +371,6 @@ function siteEpisodeNumber(wantedSeason, wantedEpisode, boundaries) {
   return offset + wantedEpisode;
 }
 
-/**
- * v1.3.3 — Check if S1 episode is within valid range.
- */
 function isValidS1Episode(wantedEpisode, boundaries) {
   if (!boundaries || boundaries.length === 0) return true;
   return wantedEpisode <= boundaries[0];
@@ -513,23 +569,23 @@ function resolveSeries(metadata) {
 }
 
 /**
- * v1.3.3 — Find episode with strict validation.
+ * v1.4.0 — findExactEpisode now accepts external (TMDB) boundaries.
  */
-function findExactEpisode(series, wantedSeason, wantedEpisode) {
-  // FIX: Reject invalid seasons
+function findExactEpisode(series, wantedSeason, wantedEpisode, externalBoundaries) {
   if (wantedSeason < 1 || wantedEpisode < 1) {
     logFailure("invalid_season_or_episode", "S" + wantedSeason + "E" + wantedEpisode);
     return null;
   }
 
   var $ = cheerio.load(series.html);
-  var boundaries = findSeasonBoundaries(series.html);
+  var boundaries = (externalBoundaries && externalBoundaries.length)
+    ? externalBoundaries
+    : findSeasonBoundaries(series.html);
   var siteEp = siteEpisodeNumber(wantedSeason, wantedEpisode, boundaries);
 
   log("season_boundaries", boundaries.length ? boundaries.join(",") : "none");
   log("computed_site_episode", "S" + wantedSeason + "E" + wantedEpisode + " → site ep " + siteEp);
 
-  // FIX: For S1, check episode is within S1 range
   if (wantedSeason === 1 && boundaries.length > 0) {
     if (!isValidS1Episode(wantedEpisode, boundaries)) {
       logFailure("s1_episode_out_of_range", "S1 ends at episode " + boundaries[0]);
@@ -569,7 +625,6 @@ function findExactEpisode(series, wantedSeason, wantedEpisode) {
     return null;
   }
 
-  // FIX: Fallback ONLY for S2, with strict S1 boundary check
   if (siteEp !== wantedEpisode && wantedSeason === 2) {
     log("fallback_raw_episode", "trying ep=" + wantedEpisode);
     var rawMatches = [];
@@ -590,11 +645,9 @@ function findExactEpisode(series, wantedSeason, wantedEpisode) {
       var epNum = episodeNumber(identity);
       var seasonNum = seasonFromText(identity);
 
-      // Must match episode AND (no season info OR correct season)
       if (epNum === wantedEpisode && (isNaN(seasonNum) || seasonNum === wantedSeason)) {
-        // FIX: For S2, must be AFTER S1 boundary
         if (boundaries.length > 0 && epNum <= boundaries[0]) {
-          return; // This is S1, not S2
+          return;
         }
 
         rawSeen[urlKey(url)] = true;
@@ -620,17 +673,17 @@ function directMedia(url) {
   return /\.(?:m3u8|mp4)(?:[?#]|$)/i.test(String(url || ""));
 }
 
-function verifyEpisodePage(series, episodeCandidate, wantedSeason, wantedEpisode) {
-  var boundaries = findSeasonBoundaries(series.html);
+function verifyEpisodePage(series, episodeCandidate, wantedSeason, wantedEpisode, externalBoundaries) {
+  var boundaries = (externalBoundaries && externalBoundaries.length)
+    ? externalBoundaries
+    : findSeasonBoundaries(series.html);
   var siteEp = siteEpisodeNumber(wantedSeason, wantedEpisode, boundaries);
 
-  // FIX: Reject invalid seasons at verification level too
   if (wantedSeason < 1 || wantedEpisode < 1) {
     logFailure("invalid_season_or_episode");
     return null;
   }
 
-  // FIX: For S1, check episode is within S1 range
   if (wantedSeason === 1 && boundaries.length > 0) {
     if (!isValidS1Episode(wantedEpisode, boundaries)) {
       logFailure("s1_episode_out_of_range", "S1 ends at episode " + boundaries[0]);
@@ -1029,7 +1082,10 @@ function resolveDailymotion(url, referer, serverName, streams, seenStreams) {
     }).catch(function () {});
 }
 
-function resolveEmbedTarget(target, expected, streams, seenStreams) {
+/**
+ * v1.4.0 — resolveEmbedTarget now accepts external boundaries.
+ */
+function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoundaries) {
   if (!target || !target.url) return Promise.resolve();
   var url = target.url;
 
@@ -1044,7 +1100,9 @@ function resolveEmbedTarget(target, expected, streams, seenStreams) {
   return fetchTextInfo(url, target.referer, originOf(target.referer)).then(function (result) {
     var explicit = explicitSeasonEpisode(result.html + " " + result.url);
     if (explicit) {
-      var boundaries = findSeasonBoundaries(result.html);
+      var boundaries = (externalBoundaries && externalBoundaries.length)
+        ? externalBoundaries
+        : findSeasonBoundaries(result.html);
       var siteEp = siteEpisodeNumber(expected.season, expected.episode, boundaries);
 
       var seasonOk = explicit.season === expected.season || explicit.episode === siteEp;
@@ -1068,14 +1126,19 @@ function resolveEmbedTarget(target, expected, streams, seenStreams) {
   }).catch(function () {});
 }
 
-function resolveAnaPlayer(playerUrl, episodeUrl, wantedSeason, wantedEpisode) {
+/**
+ * v1.4.0 — resolveAnaPlayer now accepts external boundaries.
+ */
+function resolveAnaPlayer(playerUrl, episodeUrl, wantedSeason, wantedEpisode, externalBoundaries) {
   var streams = [];
   var seenStreams = {};
 
   return fetchTextInfo(playerUrl, episodeUrl, originOf(episodeUrl)).then(function (player) {
     var explicit = explicitSeasonEpisode(player.url + " " + player.html);
     if (explicit) {
-      var boundaries = findSeasonBoundaries(player.html);
+      var boundaries = (externalBoundaries && externalBoundaries.length)
+        ? externalBoundaries
+        : findSeasonBoundaries(player.html);
       var siteEp = siteEpisodeNumber(wantedSeason, wantedEpisode, boundaries);
 
       var seasonOk = explicit.season === wantedSeason || explicit.episode === siteEp;
@@ -1134,7 +1197,7 @@ function resolveAnaPlayer(playerUrl, episodeUrl, wantedSeason, wantedEpisode) {
       var jobs = [];
       var expected = { season: wantedSeason, episode: wantedEpisode };
       for (var j = 0; j < targets.length; j++) {
-        jobs.push(resolveEmbedTarget(targets[j], expected, streams, seenStreams));
+        jobs.push(resolveEmbedTarget(targets[j], expected, streams, seenStreams, externalBoundaries));
       }
       return Promise.all(jobs).then(function () { return streams; });
     });
@@ -1146,7 +1209,10 @@ function resolveAnaPlayer(playerUrl, episodeUrl, wantedSeason, wantedEpisode) {
   });
 }
 
-function resolvePlayer(verifiedEpisode) {
+/**
+ * v1.4.0 — resolvePlayer now accepts external boundaries.
+ */
+function resolvePlayer(verifiedEpisode, externalBoundaries) {
   if (directMedia(verifiedEpisode.playerUrl)) {
     var streams = [];
     var seen = {};
@@ -1164,7 +1230,8 @@ function resolvePlayer(verifiedEpisode) {
       verifiedEpisode.playerUrl,
       verifiedEpisode.episodeUrl,
       verifiedEpisode.season,
-      verifiedEpisode.episode
+      verifiedEpisode.episode,
+      externalBoundaries
     );
   }
   return Promise.resolve([]);
@@ -1193,7 +1260,13 @@ function getStreams(tmdbId, mediaType, season, episode) {
   log("tmdb_id", id);
   log("request", "S" + wantedSeason + "E" + wantedEpisode);
 
-  var context = { metadata: null, series: null, episodeCandidate: null, verifiedEpisode: null };
+  var context = {
+    metadata: null,
+    series: null,
+    episodeCandidate: null,
+    verifiedEpisode: null,
+    tmdbBoundaries: null
+  };
 
   return getTmdbMetadata(id)
     .then(function (metadata) {
@@ -1203,7 +1276,11 @@ function getStreams(tmdbId, mediaType, season, episode) {
         logFailure("tmdb_metadata_not_found");
         return null;
       }
-      return resolveSeries(metadata);
+      // NEW: fetch TMDB season boundaries in parallel with series resolution
+      return getTmdbSeasonBoundaries(id).then(function (boundaries) {
+        context.tmdbBoundaries = boundaries;
+        return resolveSeries(metadata);
+      });
     })
     .then(function (series) {
       if (!series) {
@@ -1213,22 +1290,28 @@ function getStreams(tmdbId, mediaType, season, episode) {
       context.series = series;
       log("matched_series", series.url);
 
-      var boundaries = findSeasonBoundaries(series.html);
+      var boundaries = context.tmdbBoundaries && context.tmdbBoundaries.length
+        ? context.tmdbBoundaries
+        : findSeasonBoundaries(series.html);
       log("season_boundaries", boundaries.length ? boundaries.join(",") : "none");
 
-      context.episodeCandidate = findExactEpisode(series, wantedSeason, wantedEpisode);
+      context.episodeCandidate = findExactEpisode(
+        series, wantedSeason, wantedEpisode, context.tmdbBoundaries
+      );
       if (!context.episodeCandidate) {
         logFailure("episode_not_found", "S" + wantedSeason + "E" + wantedEpisode);
         return null;
       }
-      return verifyEpisodePage(series, context.episodeCandidate, wantedSeason, wantedEpisode);
+      return verifyEpisodePage(
+        series, context.episodeCandidate, wantedSeason, wantedEpisode, context.tmdbBoundaries
+      );
     })
     .then(function (verifiedEpisode) {
       if (!verifiedEpisode) return [];
       context.verifiedEpisode = verifiedEpisode;
       log("episode_url", verifiedEpisode.episodeUrl);
       log("player_url", verifiedEpisode.playerUrl);
-      return resolvePlayer(verifiedEpisode);
+      return resolvePlayer(verifiedEpisode, context.tmdbBoundaries);
     })
     .then(function (streams) {
       var filtered = (streams || []).filter(function (s) {
