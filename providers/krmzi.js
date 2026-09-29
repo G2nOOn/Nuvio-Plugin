@@ -1,18 +1,13 @@
 /**
  * Krmizi / Qrmzi provider for Nuvio — STRICT 1080p ONLY Edition
- * Version: 1.4.0
- *
- * v1.3.3: Removed S3 fallback, added S0/S-1 rejection.
- * v1.4.0: TMDB-based season boundaries — fixes Turkish series
- *         where site uses absolute episode numbering and site
- *         ribbon markers are missing/wrong.
- */
+ * Version: 1.4.1
+*/
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.4.0";
+var VERSION = "1.4.1";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -296,9 +291,6 @@ function findSeasonBoundaries(seriesHtml) {
 
 /**
  * v1.4.0 — Fetch season boundaries from TMDB API.
- * Returns array where boundaries[i] = cumulative episode count
- * through season (i+1). E.g. S1=18, S2=20 → [18, 38].
- * Cached in-memory to avoid hammering TMDB.
  */
 function getTmdbSeasonBoundaries(tmdbId) {
   var cacheKey = String(tmdbId);
@@ -811,7 +803,7 @@ function streamObject(url, referer, quality, serverName) {
     title: "Krmizi • " + label + (resolvedQuality ? " • " + resolvedQuality : ""),
     url: url,
     provider: "Krmizi",
-    language: "ar",
+    language: "🇮🇶",
     headers: headers
   };
   if (resolvedQuality) stream.quality = resolvedQuality;
@@ -1082,9 +1074,6 @@ function resolveDailymotion(url, referer, serverName, streams, seenStreams) {
     }).catch(function () {});
 }
 
-/**
- * v1.4.0 — resolveEmbedTarget now accepts external boundaries.
- */
 function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoundaries) {
   if (!target || !target.url) return Promise.resolve();
   var url = target.url;
@@ -1126,9 +1115,6 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
   }).catch(function () {});
 }
 
-/**
- * v1.4.0 — resolveAnaPlayer now accepts external boundaries.
- */
 function resolveAnaPlayer(playerUrl, episodeUrl, wantedSeason, wantedEpisode, externalBoundaries) {
   var streams = [];
   var seenStreams = {};
@@ -1209,9 +1195,6 @@ function resolveAnaPlayer(playerUrl, episodeUrl, wantedSeason, wantedEpisode, ex
   });
 }
 
-/**
- * v1.4.0 — resolvePlayer now accepts external boundaries.
- */
 function resolvePlayer(verifiedEpisode, externalBoundaries) {
   if (directMedia(verifiedEpisode.playerUrl)) {
     var streams = [];
@@ -1276,7 +1259,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
         logFailure("tmdb_metadata_not_found");
         return null;
       }
-      // NEW: fetch TMDB season boundaries in parallel with series resolution
       return getTmdbSeasonBoundaries(id).then(function (boundaries) {
         context.tmdbBoundaries = boundaries;
         return resolveSeries(metadata);
