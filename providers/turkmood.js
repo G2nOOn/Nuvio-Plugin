@@ -1,17 +1,17 @@
 /**
  * TurkMood provider for Nuvio — STRICT 1080p ONLY
- * Version: 1.0.2
+ * Version: 1.0.3
  *
- * v1.0.2: - Fixed pagination: /show/page/N/ instead of ?paged=N
- *         - Added Arabic ordinal → number mapping (السابعة عشر → 17)
- *         - Added search-first strategy (/?s=query) before pagination
+ * v1.0.3: - Fixed episode URL finding: parse a.text() for Arabic ordinals
+ *         - Try multiple slug variants (with/without "ة")
+ *         - Verify episode page content before using URL
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.0.2";
+var VERSION = "1.0.3";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -22,7 +22,6 @@ var MAX_PROBES = 4;
 
 var seasonBoundariesCache = {};
 
-// Arabic ordinal/word → number mapping
 var ARABIC_NUM_MAP = {
   "الاول": "1", "الأول": "1", "واحد": "1", "واحده": "1",
   "الثاني": "2", "الثانية": "2", "الثانيه": "2", "اثنين": "2",
@@ -34,13 +33,11 @@ var ARABIC_NUM_MAP = {
   "الثامن": "8", "الثامنة": "8", "الثامنه": "8", "ثمانية": "8", "ثمان": "8",
   "التاسع": "9", "التاسعة": "9", "التاسعه": "9", "تسعة": "9", "تسع": "9",
   "العاشر": "10", "العاشرة": "10", "العاشره": "10", "عشرة": "10", "عشر": "10",
-  "الحادي عشر": "11", "الحادى عشر": "11",
-  "الثاني عشر": "12", "الثانى عشر": "12",
+  "الحادي عشر": "11", "الثاني عشر": "12",
   "الثالث عشر": "13", "الرابع عشر": "14", "الخامس عشر": "15",
-  "السادس عشر": "16", "السابع عشر": "17",
+  "السادس عشر": "16", "السابع عشر": "17", "السابعة عشر": "17", "السابعه عشر": "17",
   "الثامن عشر": "18", "التاسع عشر": "19",
-  "العشرون": "20", "العشرين": "20",
-  "الحادي والعشرين": "21", "الثاني والعشرين": "22"
+  "العشرون": "20", "العشرين": "20"
 };
 
 function log(key, value) {
@@ -61,8 +58,9 @@ function decodeHtml(v) {
   return String(v || "")
     .replace(/&amp;/gi, "&").replace(/&#0*38;/gi, "&")
     .replace(/&quot;/gi, "\"").replace(/&#0*39;|'/gi, "'")
-    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    .replace(/&#x([0-9a-f]+);/gi, function (_, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace;
+(/&lt;/gi, "<").replace(/&gt ;/gi, ">")
+    .replace if (/(/&#x([0-9a-f]+);/gi, function (_, h) { return String.fromCharCode(parseInt(h, 16)); })
     .replace(/&#([0-9]+);/g, function (_, d) { return String.fromCharCode(parseInt(d, 10)); });
 }
 
@@ -73,8 +71,7 @@ function cleanUrl(v) {
 function absUrl(v, base) {
   var url = cleanUrl(v);
   if (!url || /^javascript:/i.test(url) || url.charAt(0) === "#") return "";
-  if (url.indexOf("//") === 0) return "https:" + url;
-  if (/^https?:\/\//i.test(url)) return url;
+  if (url.indexOf("//") === 0) return "https:" + url^https?:\/\//i.test(url)) return url;
   var origin = originOf(base || SITE_BASE);
   if (url.charAt(0) === "/") return origin + url;
   var b = String(base || SITE_BASE).split("#")[0].split("?")[0];
@@ -165,7 +162,6 @@ function contains(h, n) {
   return (" " + h + " ").indexOf(" " + n + " ") >= 0;
 }
 
-// ====== v1.0.2: Enhanced number extraction with Arabic ordinals ======
 function extractNumbers(v) {
   var text = String(v || "");
   var result = [];
@@ -311,7 +307,7 @@ function getTmdbMetadata(tmdbId) {
   });
 }
 
-// ====== v1.0.2: Search first ======
+// ====== SEARCH ======
 function searchSite(query) {
   var url = SITE_BASE + "/?s=" + encodeURIComponent(query);
   return fetchText(url, SITE_BASE + "/", "").then(function (r) {
@@ -331,7 +327,6 @@ function searchSite(query) {
   });
 }
 
-// ====== v1.0.2: Fixed pagination ======
 function fetchShowPage(pageNum) {
   var url = pageNum > 1
     ? SITE_BASE + "/show/page/" + pageNum + "/"
@@ -353,15 +348,12 @@ function fetchShowPage(pageNum) {
   });
 }
 
-// ====== v1.0.2: Search-first + pagination fallback ======
 function findSeries(metadata) {
   var results = [], seen = {};
 
   function trySearch(idx) {
     if (idx >= metadata.titles.length) return tryPagination(1);
-    log("search_try", metadata.titles[idx]);
     return searchSite(metadata.titles[idx]).then(function (cards) {
-      log("search_results", cards.length);
       for (var i = 0; i < cards.length; i++) {
         var score = matchScore(cards[i].combined, metadata.titles);
         if (score >= 70 && !seen[urlKey(cards[i].url)]) {
@@ -371,84 +363,134 @@ function findSeries(metadata) {
       }
       if (results.length) {
         results.sort(function (a, b) { return b.score - a.score; });
-        log("best_match_search", results[0].title + " score=" + results[0].score);
         return results[0];
       }
       return trySearch(idx + 1);
-    }).catch(function (e) {
-      logFailure("search_failed", metadata.titles[idx] + " " + errMsg(e));
-      return trySearch(idx + 1);
-    });
+    }).catch(function () { return trySearch(idx + 1); });
   }
 
   function tryPagination(pageNum) {
     if (pageNum > MAX_SERIES_PAGES) {
       results.sort(function (a, b) { return b.score - a.score; });
-      log("series_candidates", results.length);
       return results.length ? results[0] : null;
     }
     return fetchShowPage(pageNum).then(function (r) {
-      var matched = 0;
       for (var i = 0; i < r.cards.length; i++) {
         var c = r.cards[i];
         var score = matchScore(c.combined, metadata.titles);
         if (score >= 70 && !seen[urlKey(c.url)]) {
           seen[urlKey(c.url)] = true;
           results.push({ url: c.url, title: c.title, score: score });
-          matched++;
-        }
-      }
-      log("page_" + pageNum + "_matches", matched);
-      if (matched === 0 && pageNum === 1) {
-        for (var dbg = 0; dbg < Math.min(10, r.cards.length); dbg++) {
-          log("sample_card_" + dbg, r.cards[dbg].title.slice(0, 60));
         }
       }
       if (results.length > 0 && pageNum >= 2) {
         results.sort(function (a, b) { return b.score - a.score; });
-        log("best_match_pagination", results[0].title + " score=" + results[0].score);
         return results[0];
       }
       return tryPagination(pageNum + 1);
-    }).catch(function (e) {
-      logFailure("show_page_failed", "page=" + pageNum + " " + errMsg(e));
-      return tryPagination(pageNum + 1);
-    });
+    }).catch(function () { return tryPagination(pageNum + 1); });
   }
 
   return trySearch(0);
 }
 
-// ====== FIND EPISODE URL ======
+// ====== v1.0.3: Find episode URL with text-based matching + slug variants ======
 function findEpisodeUrl(series, siteEp) {
   return fetchText(series.url, SITE_BASE + "/", "").then(function (r) {
     var $ = cheerio.load(r.html);
     var candidates = [], seen = {};
-    $('a[href*="الحلقة"], a[href*="-الحلقة-"]').each(function (_, el) {
+
+    // v1.0.3: Check ALL anchors, use a.text() (not href, which is URL-encoded Arabic)
+    $('a').each(function (_, el) {
       var a = wrap($, el);
-      var u = absUrl(a.attr("href"), r.url);
+      var href = a.attr("href") || "";
+      if (!href) return;
+
+      var u = absUrl(href, r.url);
       if (!u || seen[urlKey(u)]) return;
+
+      // Skip non-episode URLs
+      if (u.indexOf("/series/") >= 0) return;
       if (u.indexOf("/see/") >= 0) return;
-      var text = (a.text() || "") + " " + (a.attr("title") || "");
-      var epNum = episodeNumber(text);
+      if (u.indexOf("/episode/") >= 0) return;
+      if (u.indexOf("/genre/") >= 0) return;
+      if (u.indexOf("/actor/") >= 0) return;
+      if (u.indexOf("/category/") >= 0) return;
+      if (u.indexOf("/page/") >= 0) return;
+      if (u.indexOf("krmz.onl") < 0) return;
+
+      // v1.0.3: Extract ep number from TEXT (not URL)
+      var text = (a.text() || "").trim();
+      var attrTitle = a.attr("title") || "";
+      var identity = text + " " + attrTitle;
+      var epNum = episodeNumber(identity);
+
       if (!isNaN(epNum) && epNum === siteEp) {
         seen[urlKey(u)] = true;
-        candidates.push({ url: u, text: text.trim(), epNum: epNum });
+        candidates.push({ url: u, text: text, identity: identity, epNum: epNum });
       }
     });
+
     log("episode_candidates_from_series", candidates.length);
-    if (candidates.length > 0) return candidates[0];
+    if (candidates.length > 0) {
+      log("episode_found_via_link", candidates[0].text.slice(0, 50));
+      return candidates[0];
+    }
+
+    // v1.0.3: Try multiple slug variants
     var slugMatch = series.url.match(/\/series\/([^\/]+)\/?$/);
     if (slugMatch) {
-      var baseSlug = decodeURIComponent(slugMatch[1]).replace(/^مسلسل-/, "");
-      var guess = SITE_BASE + "/" + encodeURIComponent(baseSlug + "-الحلقة-" + siteEp) + "/";
-      log("episode_url_guess", guess);
-      return { url: guess, text: "guess", epNum: siteEp };
+      var baseSlug = decodeURIComponent(slugMatch[1]);
+      var cleanSlug = baseSlug.replace(/^مسلسل-/, "");
+
+      var variants = [
+        cleanSlug,
+        cleanSlug.replace(/ة-/, "-").replace(/ة$/, ""),
+        cleanSlug.replace(/ة/g, "")
+      ];
+
+      var unique = [];
+      for (var v = 0; v < variants.length; v++) {
+        if (variants[v] && unique.indexOf(variants[v]) < 0) unique.push(variants[v]);
+      }
+
+      log("slug_variants", unique.join(" | "));
+      return trySlugVariants(unique, siteEp, 0);
     }
     return null;
   }).catch(function (e) {
     logFailure("series_page_failed", errMsg(e));
     return null;
+  });
+}
+
+// v1.0.3: Try each slug variant, verify content matches
+function trySlugVariants(slugs, siteEp, index) {
+  if (index >= slugs.length) {
+    logFailure("no_slug_variant_matched");
+    return Promise.resolve(null);
+  }
+  var guess = SITE_BASE + "/" + encodeURIComponent(slugs[index] + "-الحلقة-" + siteEp) + "/";
+  log("try_slug_variant", guess);
+  return fetchText(guess, SITE_BASE + "/", "").then(function (r) {
+    // v1.0.3: Verify the returned page is actually the episode
+    var $ = cheerio.load(r.html);
+    var heading = [$("h1").first().text(), $("title").first().text()].join(" ").trim();
+    var headingEpNum = episodeNumber(heading);
+
+    // If page returned homepage or wrong episode, try next variant
+    if (!heading || r.url === SITE_BASE + "/" || r.url === SITE_BASE) {
+      log("slug_variant_redirected_home", slugs[index]);
+      return trySlugVariants(slugs, siteEp, index + 1);
+    }
+    if (!isNaN(headingEpNum) && headingEpNum !== siteEp) {
+      log("slug_variant_wrong_episode", slugs[index] + " got ep " + headingEpNum);
+      return trySlugVariants(slugs, siteEp, index + 1);
+    }
+    log("slug_variant_ok", slugs[index]);
+    return { url: r.url, text: heading.slice(0, 80), epNum: siteEp };
+  }).catch(function () {
+    return trySlugVariants(slugs, siteEp, index + 1);
   });
 }
 
