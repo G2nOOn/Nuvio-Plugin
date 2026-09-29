@@ -45,7 +45,7 @@
       "id": "turkmood",
       "name": "TurkMood",
       "description": "TurkMood — krmz.onl | STRICT 1080p ONLY",
-      "version": "1.0.1",
+      "version": "1.0.3",
       "author": "LO",
       "supportedTypes": ["tv"],
       "filename": "providers/turkmood.js",
