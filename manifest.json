@@ -44,12 +44,15 @@
     {
       "id": "turkmood",
       "name": "TurkMood",
+      "description": "TurkMood — krmz.onl | STRICT 1080p ONLY",
       "version": "1.0.0",
-      "description": "TurkMood — krmz.onl | 1080p only",
       "author": "LO",
-      "filename": "turkmood.js",
       "supportedTypes": ["tv"],
-      "enabled": true
+      "filename": "providers/turkmood.js",
+      "enabled": true,
+      "formats": ["m3u8"],
+      "logo": "https://krmz.onl/favicon.ico",
+      "contentLanguage": ["ar", "tr"]
     },
     {
       "id": "krmzi",
