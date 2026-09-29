@@ -1,20 +1,17 @@
 /**
  * TurkMood provider for Nuvio — STRICT 1080p ONLY
- * Version: 1.0.0
+ * Version: 1.0.2
  *
- * Flow:
- *   /show/                → find series
- *   /{slug}-الحلقة-N/     → get /see/ URL
- *   /{slug}-الحلقة-N/see/ → iframe srcs (cdnplus.org, vdesk.live, mp4plus)
- *   cdnplus iframe        → cdnplus.space page with master.m3u8
- *   master.m3u8           → x = 1080p variant
+ * v1.0.2: - Fixed pagination: /show/page/N/ instead of ?paged=N
+ *         - Added Arabic ordinal → number mapping (السابعة عشر → 17)
+ *         - Added search-first strategy (/?s=query) before pagination
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.0.0";
+var VERSION = "1.0.2";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -24,6 +21,27 @@ var MAX_SERIES_PAGES = 8;
 var MAX_PROBES = 4;
 
 var seasonBoundariesCache = {};
+
+// Arabic ordinal/word → number mapping
+var ARABIC_NUM_MAP = {
+  "الاول": "1", "الأول": "1", "واحد": "1", "واحده": "1",
+  "الثاني": "2", "الثانية": "2", "الثانيه": "2", "اثنين": "2",
+  "الثالث": "3", "الثالثة": "3", "الثالثه": "3", "ثلاثة": "3", "ثلاث": "3",
+  "الرابع": "4", "الرابعة": "4", "الرابعه": "4", "اربعة": "4", "أربعة": "4",
+  "الخامس": "5", "الخامسة": "5", "الخامسه": "5", "خمسة": "5", "خمس": "5",
+  "السادس": "6", "السادسة": "6", "السادسه": "6", "ستة": "6", "ست": "6",
+  "السابع": "7", "السابعة": "7", "السابعه": "7", "سبعة": "7", "سبع": "7",
+  "الثامن": "8", "الثامنة": "8", "الثامنه": "8", "ثمانية": "8", "ثمان": "8",
+  "التاسع": "9", "التاسعة": "9", "التاسعه": "9", "تسعة": "9", "تسع": "9",
+  "العاشر": "10", "العاشرة": "10", "العاشره": "10", "عشرة": "10", "عشر": "10",
+  "الحادي عشر": "11", "الحادى عشر": "11",
+  "الثاني عشر": "12", "الثانى عشر": "12",
+  "الثالث عشر": "13", "الرابع عشر": "14", "الخامس عشر": "15",
+  "السادس عشر": "16", "السابع عشر": "17",
+  "الثامن عشر": "18", "التاسع عشر": "19",
+  "العشرون": "20", "العشرين": "20",
+  "الحادي والعشرين": "21", "الثاني والعشرين": "22"
+};
 
 function log(key, value) {
   var s = value === undefined || value === null || value === "" ? "" : " " + String(value);
@@ -119,7 +137,7 @@ function normalize(v) {
 
 function compactTitle(v) {
   return normalize(v)
-    .replace(/(^|\s)(مسلسل|المسلسل|series|tv|show|مترجم|مترجمه|كامل|كامله|قرمزي|krmzi|turkmood)(?=\s|$)/g, " ")
+    .replace(/(^|\s)(مسلسل|المسلسل|series|tv|show|مترجم|مترجمه|كامل|كامله|قرمزي|krmzi|turkmood|في|من|على)(?=\s|$)/g, " ")
     .replace(/\s+\d{4}\s*$/, "").replace(/\s+/g, " ").trim();
 }
 
@@ -147,16 +165,53 @@ function contains(h, n) {
   return (" " + h + " ").indexOf(" " + n + " ") >= 0;
 }
 
+// ====== v1.0.2: Enhanced number extraction with Arabic ordinals ======
+function extractNumbers(v) {
+  var text = String(v || "");
+  var result = [];
+  var m = text.match(/\d{1,4}/g);
+  if (m) result = result.concat(m);
+
+  var normalized = normalize(text);
+  var keys = Object.keys(ARABIC_NUM_MAP);
+  for (var i = 0; i < keys.length; i++) {
+    if (normalized.indexOf(normalize(keys[i])) >= 0) {
+      result.push(ARABIC_NUM_MAP[keys[i]]);
+    }
+  }
+  return result;
+}
+
 function matchScore(field, titles) {
   var nf = normalize(field), cf = compactTitle(field);
   if (!nf) return 0;
   var best = 0;
+  var fieldNums = extractNumbers(nf);
+
   for (var i = 0; i < titles.length; i++) {
     var t = compactTitle(titles[i]);
     if (!t || t.length < 2) continue;
+
     if (cf === t) best = Math.max(best, 120);
     else if (nf === normalize(titles[i])) best = Math.max(best, 115);
     else if (contains(nf, t)) best = Math.max(best, 80);
+    else {
+      var titleNums = extractNumbers(normalize(titles[i]));
+      for (var j = 0; j < fieldNums.length; j++) {
+        for (var k = 0; k < titleNums.length; k++) {
+          if (fieldNums[j] === titleNums[k] && fieldNums[j].length >= 1) {
+            best = Math.max(best, 90);
+          }
+        }
+      }
+      var fieldWords = nf.split(" ").filter(function (w) { return w.length >= 3; });
+      var titleWords = normalize(titles[i]).split(" ").filter(function (w) { return w.length >= 3; });
+      var shared = 0;
+      for (var f = 0; f < fieldWords.length; f++) {
+        if (titleWords.indexOf(fieldWords[f]) >= 0) shared++;
+      }
+      if (shared >= 1) best = Math.max(best, 70);
+    }
   }
   return best;
 }
@@ -256,9 +311,31 @@ function getTmdbMetadata(tmdbId) {
   });
 }
 
-// ====== SEARCH SERIES ======
+// ====== v1.0.2: Search first ======
+function searchSite(query) {
+  var url = SITE_BASE + "/?s=" + encodeURIComponent(query);
+  return fetchText(url, SITE_BASE + "/", "").then(function (r) {
+    var $ = cheerio.load(r.html);
+    var cards = [], seen = {};
+    $('a[href*="/series/"]').each(function (_, el) {
+      var a = wrap($, el);
+      var u = absUrl(a.attr("href"), r.url);
+      if (!u || seen[urlKey(u)]) return;
+      var title = a.attr("title") || a.text() || "";
+      var img = a.find("img").first();
+      var alt = img.attr("alt") || "";
+      seen[urlKey(u)] = true;
+      cards.push({ url: u, title: title.trim(), combined: title + " " + alt });
+    });
+    return cards;
+  });
+}
+
+// ====== v1.0.2: Fixed pagination ======
 function fetchShowPage(pageNum) {
-  var url = SITE_BASE + "/show/" + (pageNum > 1 ? "?paged=" + pageNum : "");
+  var url = pageNum > 1
+    ? SITE_BASE + "/show/page/" + pageNum + "/"
+    : SITE_BASE + "/show/";
   return fetchText(url, SITE_BASE + "/", "").then(function (r) {
     var $ = cheerio.load(r.html);
     var cards = [], seen = {};
@@ -276,9 +353,35 @@ function fetchShowPage(pageNum) {
   });
 }
 
+// ====== v1.0.2: Search-first + pagination fallback ======
 function findSeries(metadata) {
   var results = [], seen = {};
-  function tryPage(pageNum) {
+
+  function trySearch(idx) {
+    if (idx >= metadata.titles.length) return tryPagination(1);
+    log("search_try", metadata.titles[idx]);
+    return searchSite(metadata.titles[idx]).then(function (cards) {
+      log("search_results", cards.length);
+      for (var i = 0; i < cards.length; i++) {
+        var score = matchScore(cards[i].combined, metadata.titles);
+        if (score >= 70 && !seen[urlKey(cards[i].url)]) {
+          seen[urlKey(cards[i].url)] = true;
+          results.push({ url: cards[i].url, title: cards[i].title, score: score });
+        }
+      }
+      if (results.length) {
+        results.sort(function (a, b) { return b.score - a.score; });
+        log("best_match_search", results[0].title + " score=" + results[0].score);
+        return results[0];
+      }
+      return trySearch(idx + 1);
+    }).catch(function (e) {
+      logFailure("search_failed", metadata.titles[idx] + " " + errMsg(e));
+      return trySearch(idx + 1);
+    });
+  }
+
+  function tryPagination(pageNum) {
     if (pageNum > MAX_SERIES_PAGES) {
       results.sort(function (a, b) { return b.score - a.score; });
       log("series_candidates", results.length);
@@ -289,24 +392,31 @@ function findSeries(metadata) {
       for (var i = 0; i < r.cards.length; i++) {
         var c = r.cards[i];
         var score = matchScore(c.combined, metadata.titles);
-        if (score >= 100 && !seen[urlKey(c.url)]) {
+        if (score >= 70 && !seen[urlKey(c.url)]) {
           seen[urlKey(c.url)] = true;
           results.push({ url: c.url, title: c.title, score: score });
           matched++;
         }
       }
       log("page_" + pageNum + "_matches", matched);
-      if (results.length > 0 && pageNum >= 3) {
+      if (matched === 0 && pageNum === 1) {
+        for (var dbg = 0; dbg < Math.min(10, r.cards.length); dbg++) {
+          log("sample_card_" + dbg, r.cards[dbg].title.slice(0, 60));
+        }
+      }
+      if (results.length > 0 && pageNum >= 2) {
         results.sort(function (a, b) { return b.score - a.score; });
+        log("best_match_pagination", results[0].title + " score=" + results[0].score);
         return results[0];
       }
-      return tryPage(pageNum + 1);
+      return tryPagination(pageNum + 1);
     }).catch(function (e) {
       logFailure("show_page_failed", "page=" + pageNum + " " + errMsg(e));
-      return tryPage(pageNum + 1);
+      return tryPagination(pageNum + 1);
     });
   }
-  return tryPage(1);
+
+  return trySearch(0);
 }
 
 // ====== FIND EPISODE URL ======
@@ -342,7 +452,7 @@ function findEpisodeUrl(series, siteEp) {
   });
 }
 
-// ====== EXTRACT /see/ URL ======
+// ====== EXTRACT /see/ ======
 function extractSeeUrl(episodeUrl) {
   return fetchText(episodeUrl, SITE_BASE + "/", "").then(function (r) {
     var $ = cheerio.load(r.html);
@@ -353,8 +463,6 @@ function extractSeeUrl(episodeUrl) {
       if (u) seeUrl = u;
     });
     if (!seeUrl) seeUrl = episodeUrl.replace(/\/$/, "") + "/see/";
-    var heading = [$("h1").first().text(), $("title").first().text()].join(" ");
-    log("episode_heading", heading.slice(0, 80));
     return { seeUrl: seeUrl, episodeUrl: r.url, html: r.html };
   }).catch(function (e) {
     logFailure("episode_page_failed", errMsg(e));
@@ -362,7 +470,7 @@ function extractSeeUrl(episodeUrl) {
   });
 }
 
-// ====== EXTRACT IFRAMES FROM /see/ PAGE ======
+// ====== EXTRACT IFRAMES ======
 function extractIframes(seeUrl, episodeUrl) {
   return fetchText(seeUrl, episodeUrl, originOf(episodeUrl)).then(function (r) {
     var $ = cheerio.load(r.html);
@@ -401,7 +509,7 @@ function extractIframes(seeUrl, episodeUrl) {
   });
 }
 
-// ====== EXTRACT MASTER M3U8 FROM PLAYER PAGE ======
+// ====== EXTRACT MASTER ======
 function extractMasterUrl(playerUrl, referer) {
   return fetchText(playerUrl, referer, "").then(function (r) {
     var html = r.html;
@@ -438,7 +546,6 @@ function extractMasterUrl(playerUrl, referer) {
   });
 }
 
-// ====== PARSE ENCODED MASTER ======
 function variantsFromEncodedMaster(masterUrl) {
   var value = String(masterUrl || "");
   var match = value.match(/^(https?:\/\/.+\/)([a-zA-Z0-9]+)_((?:,[a-z0-9]+)+),?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
@@ -462,7 +569,6 @@ function variantsFromEncodedMaster(masterUrl) {
   return variants;
 }
 
-// ====== RESOLVE PLAYER ======
 function resolvePlayer(iframe, seeUrl, episodeUrl) {
   return extractMasterUrl(iframe.url, seeUrl).then(function (r) {
     var streams = [];
@@ -482,13 +588,11 @@ function resolvePlayer(iframe, seeUrl, episodeUrl) {
   });
 }
 
-// ====== QUALITY ======
 function qualityRank(q) {
   var r = { "4K": 7000, "1080p": 6000, "720p": 5000, "576p": 4000, "480p": 3000, "360p": 2000, "320p": 1000 };
   return r[q] || 0;
 }
 
-// ====== STREAM OBJECT ======
 function streamObject(url, quality, serverName) {
   var q = quality || "1080p";
   var label = String(serverName || "Server").replace(/\s+/g, " ").trim();
