@@ -42,6 +42,16 @@
       "contentLanguage": ["en"]
     },
     {
+      "id": "turkmood",
+      "name": "TurkMood",
+      "version": "1.0.0",
+      "description": "TurkMood — krmz.onl | 1080p only",
+      "author": "LO",
+      "filename": "turkmood.js",
+      "supportedTypes": ["tv"],
+      "enabled": true
+    },
+    {
       "id": "krmzi",
       "name": "Krmzi",
       "description": "Krmzi Turkish series - STRICT 1080p ONLY",
