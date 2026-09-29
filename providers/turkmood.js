@@ -1,17 +1,18 @@
 /**
  * TurkMood provider for Nuvio — STRICT 1080p ONLY
- * Version: 1.0.3
+ * Version: 1.0.4
  *
- * v1.0.3: - Fixed episode URL finding: parse a.text() for Arabic ordinals
- *         - Try multiple slug variants (with/without "ة")
- *         - Verify episode page content before using URL
+ * v1.0.4: - Fixed slug variant ORDER: no "ة" first
+ *         - Robust URL validation (decode + check for الحلقة pattern)
+ *         - Anchor search uses decoded URLs
+ *         - Normalized redirect detection (trailing slash)
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.0.3";
+var VERSION = "1.0.4";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -58,9 +59,8 @@ function decodeHtml(v) {
   return String(v || "")
     .replace(/&amp;/gi, "&").replace(/&#0*38;/gi, "&")
     .replace(/&quot;/gi, "\"").replace(/&#0*39;|'/gi, "'")
-    .replace;
-(/&lt;/gi, "<").replace(/&gt ;/gi, ">")
-    .replace if (/(/&#x([0-9a-f]+);/gi, function (_, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, function (_, h) { return String.fromCharCode(parseInt(h, 16)); })
     .replace(/&#([0-9]+);/g, function (_, d) { return String.fromCharCode(parseInt(d, 10)); });
 }
 
@@ -68,10 +68,23 @@ function cleanUrl(v) {
   return decodeHtml(v).replace(/\\u0026/gi, "&").replace(/\\u003d/gi, "=").replace(/\\\//g, "/").trim();
 }
 
+function safeDecodeUrl(v) {
+  try { return decodeURIComponent(String(v || "")); } catch (_) { return String(v || ""); }
+}
+
+function normalizeFinalUrl(v) {
+  var u = String(v || "").toLowerCase().trim();
+  // strip trailing slash, strip query/hash
+  u = u.split("#")[0].split("?")[0];
+  u = u.replace(/\/+$/, "");
+  return u;
+}
+
 function absUrl(v, base) {
   var url = cleanUrl(v);
   if (!url || /^javascript:/i.test(url) || url.charAt(0) === "#") return "";
-  if (url.indexOf("//") === 0) return "https:" + url^https?:\/\//i.test(url)) return url;
+  if (url.indexOf("//") === 0) return "https:" + url;
+  if (/^https?:\/\//i.test(url)) return url;
   var origin = originOf(base || SITE_BASE);
   if (url.charAt(0) === "/") return origin + url;
   var b = String(base || SITE_BASE).split("#")[0].split("?")[0];
@@ -134,7 +147,7 @@ function normalize(v) {
 
 function compactTitle(v) {
   return normalize(v)
-    .replace(/(^|\s)(مسلسل|المسلسل|series|tv|show|مترجم|مترجمه|كامل|كامله|قرمزي|krmzi|turkmood|في|من|على)(?=\s|$)/g, " ")
+    .replace(/(^|\s)(مسلسل|المسلسل|series|tv|show|مترجم|مترجمه|كامل|كامله|قرمزي|krmzi|turkmood)(?=\s|$)/g, " ")
     .replace(/\s+\d{4}\s*$/, "").replace(/\s+/g, " ").trim();
 }
 
@@ -167,7 +180,6 @@ function extractNumbers(v) {
   var result = [];
   var m = text.match(/\d{1,4}/g);
   if (m) result = result.concat(m);
-
   var normalized = normalize(text);
   var keys = Object.keys(ARABIC_NUM_MAP);
   for (var i = 0; i < keys.length; i++) {
@@ -183,11 +195,9 @@ function matchScore(field, titles) {
   if (!nf) return 0;
   var best = 0;
   var fieldNums = extractNumbers(nf);
-
   for (var i = 0; i < titles.length; i++) {
     var t = compactTitle(titles[i]);
     if (!t || t.length < 2) continue;
-
     if (cf === t) best = Math.max(best, 120);
     else if (nf === normalize(titles[i])) best = Math.max(best, 115);
     else if (contains(nf, t)) best = Math.max(best, 80);
@@ -292,9 +302,9 @@ function parseTmdbAltTitles(html) {
 }
 
 function getTmdbMetadata(tmdbId) {
-  var langs = ["tr-TR", "en-US", "ar-SA"], jobs = [];
-  for (var i = 0; i < langs.length; i++) {
-    jobs.push(fetchText(TMDB_BASE + "/tv/" + encodeURIComponent(tmdbId) + "?language=" + langs[i], "", "")
+  var langs = ["tr-TR", "en-US", "ar-SA"], jobs =    if [];
+  for (var i = 0; i < ( langs.length; i++) {
+    jobs.pushidx(fetchText(TMDB >=_BASE + "/tv/" + metadata encodeURIComponent(tmdbId) + "?language=" + langs[i], "", "")
       .then(function (r) { return parseTmdbPage(r.html); }).catch(function () { return { title: "", year: 0 }; }));
   }
   var aliasesJob = fetchText(TMDB_BASE + "/tv/" + encodeURIComponent(tmdbId) + "/titles?language=en-US", "", "")
@@ -352,7 +362,7 @@ function findSeries(metadata) {
   var results = [], seen = {};
 
   function trySearch(idx) {
-    if (idx >= metadata.titles.length) return tryPagination(1);
+.titles.length) return tryPagination(1);
     return searchSite(metadata.titles[idx]).then(function (cards) {
       for (var i = 0; i < cards.length; i++) {
         var score = matchScore(cards[i].combined, metadata.titles);
@@ -394,37 +404,105 @@ function findSeries(metadata) {
   return trySearch(0);
 }
 
-// ====== v1.0.3: Find episode URL with text-based matching + slug variants ======
+// ====== v1.0.4: REORDERED slug variants (no-ة first) ======
+function buildSlugVariants(seriesUrl) {
+  var slugMatch = String(seriesUrl || "").match(/\/series\/([^\/]+)\/?$/);
+  if (!slugMatch) return [];
+  
+  var rawSlug = "";
+  try { rawSlug = decodeURIComponent(slugMatch[1]); } catch (_) { rawSlug = slugMatch[1]; }
+  var cleanSlug = rawSlug.replace(/^مسلسل-/, "");
+  
+  var variants = [];
+  var seen = {};
+  
+  function add(v) {
+    var k = String(v || "").trim();
+    if (k && !seen[k]) { seen[k] = true; variants.push(k); }
+  }
+  
+  // Priority 1: remove ALL "ة"
+  add(cleanSlug.replace(/ة/g, ""));
+  // Priority 2: remove trailing "ة" only
+  add(cleanSlug.replace(/ة$/, "").replace(/ة-/, "-"));
+  // Priority 3: original
+  add(cleanSlug);
+  
+  return variants;
+}
+
+// ====== v1.0.4: STRICT URL validation ======
+function trySlugVariants(slugs, siteEp, index) {
+  if (!slugs || index >= slugs.length) {
+    logFailure("no_slug_variant_matched");
+    return Promise.resolve(null);
+  }
+  var guess = SITE_BASE + "/" + encodeURIComponent(slugs[index] + "-الحلقة-" + siteEp) + "/";
+  log("try_slug_variant", "[" + index + "] " + slugs[index]);
+  
+  return fetchText(guess, SITE_BASE + "/", "").then(function (r) {
+    var finalUrl = String(r.url || "");
+    var finalDecoded = safeDecodeUrl(finalUrl);
+    var normalizedFinal = normalizeFinalUrl(finalUrl);
+    var normalizedBase = normalizeFinalUrl(SITE_BASE);
+    
+    // Check 1: redirected to homepage
+    if (normalizedFinal === normalizedBase) {
+      log("slug_variant_redirected_home", "[" + index + "]");
+      return trySlugVariants(slugs, siteEp, index + 1);
+    }
+    
+    // Check 2: URL must contain "الحلقة" (decoded)
+    if (finalDecoded.indexOf("الحلقة") < 0 && finalDecoded.indexOf("حلقة") < 0) {
+      log("slug_variant_no_episode_in_url", finalDecoded.slice(0, 80));
+      return trySlugVariants(slugs, siteEp, index + 1);
+    }
+    
+    // Check 3: page heading must match the episode
+    var $ = cheerio.load(r.html);
+    var heading = [$("h1").first().text(), $("title").first().text()].join(" ").trim();
+    var headingEpNum = episodeNumber(heading);
+    if (!isNaN(headingEpNum) && headingEpNum !== siteEp) {
+      log("slug_variant_wrong_episode", "got " + headingEpNum + " wanted " + siteEp);
+      return trySlugVariants(slugs, siteEp, index + 1);
+    }
+    
+    log("slug_variant_ok", "[" + index + "] " + finalDecoded.slice(0, 100));
+    return { url: r.url, text: heading.slice(0, 80), epNum: siteEp };
+  }).catch(function (e) {
+    logFailure("slug_variant_fetch_failed", "[" + index + "] " + errMsg(e));
+    return trySlugVariants(slugs, siteEp, index + 1);
+  });
+}
+
+// ====== v1.0.4: search anchors with DECODED hrefs ======
 function findEpisodeUrl(series, siteEp) {
   return fetchText(series.url, SITE_BASE + "/", "").then(function (r) {
     var $ = cheerio.load(r.html);
     var candidates = [], seen = {};
 
-    // v1.0.3: Check ALL anchors, use a.text() (not href, which is URL-encoded Arabic)
     $('a').each(function (_, el) {
       var a = wrap($, el);
       var href = a.attr("href") || "";
       if (!href) return;
-
+      
       var u = absUrl(href, r.url);
       if (!u || seen[urlKey(u)]) return;
-
-      // Skip non-episode URLs
-      if (u.indexOf("/series/") >= 0) return;
-      if (u.indexOf("/see/") >= 0) return;
-      if (u.indexOf("/episode/") >= 0) return;
-      if (u.indexOf("/genre/") >= 0) return;
-      if (u.indexOf("/actor/") >= 0) return;
-      if (u.indexOf("/category/") >= 0) return;
-      if (u.indexOf("/page/") >= 0) return;
+      
+      var decoded = safeDecodeUrl(u);
+      
+      // Must be an episode URL
+      if (decoded.indexOf("الحلقة") < 0 && decoded.indexOf("حلقة") < 0) return;
+      // Must be on krmz.onl
       if (u.indexOf("krmz.onl") < 0) return;
-
-      // v1.0.3: Extract ep number from TEXT (not URL)
+      // Skip /see/
+      if (u.indexOf("/see/") >= 0) return;
+      
       var text = (a.text() || "").trim();
-      var attrTitle = a.attr("title") || "";
-      var identity = text + " " + attrTitle;
+      var title = a.attr("title") || "";
+      var identity = text + " " + title + " " + decoded;
       var epNum = episodeNumber(identity);
-
+      
       if (!isNaN(epNum) && epNum === siteEp) {
         seen[urlKey(u)] = true;
         candidates.push({ url: u, text: text, identity: identity, epNum: epNum });
@@ -433,64 +511,17 @@ function findEpisodeUrl(series, siteEp) {
 
     log("episode_candidates_from_series", candidates.length);
     if (candidates.length > 0) {
-      log("episode_found_via_link", candidates[0].text.slice(0, 50));
+      log("episode_found_via_link", candidates[0].url.slice(0, 100));
       return candidates[0];
     }
 
-    // v1.0.3: Try multiple slug variants
-    var slugMatch = series.url.match(/\/series\/([^\/]+)\/?$/);
-    if (slugMatch) {
-      var baseSlug = decodeURIComponent(slugMatch[1]);
-      var cleanSlug = baseSlug.replace(/^مسلسل-/, "");
-
-      var variants = [
-        cleanSlug,
-        cleanSlug.replace(/ة-/, "-").replace(/ة$/, ""),
-        cleanSlug.replace(/ة/g, "")
-      ];
-
-      var unique = [];
-      for (var v = 0; v < variants.length; v++) {
-        if (variants[v] && unique.indexOf(variants[v]) < 0) unique.push(variants[v]);
-      }
-
-      log("slug_variants", unique.join(" | "));
-      return trySlugVariants(unique, siteEp, 0);
-    }
-    return null;
+    // Fallback: slug variants
+    var variants = buildSlugVariants(series.url);
+    log("slug_variants", variants.join(" | "));
+    return trySlugVariants(variants, siteEp, 0);
   }).catch(function (e) {
     logFailure("series_page_failed", errMsg(e));
     return null;
-  });
-}
-
-// v1.0.3: Try each slug variant, verify content matches
-function trySlugVariants(slugs, siteEp, index) {
-  if (index >= slugs.length) {
-    logFailure("no_slug_variant_matched");
-    return Promise.resolve(null);
-  }
-  var guess = SITE_BASE + "/" + encodeURIComponent(slugs[index] + "-الحلقة-" + siteEp) + "/";
-  log("try_slug_variant", guess);
-  return fetchText(guess, SITE_BASE + "/", "").then(function (r) {
-    // v1.0.3: Verify the returned page is actually the episode
-    var $ = cheerio.load(r.html);
-    var heading = [$("h1").first().text(), $("title").first().text()].join(" ").trim();
-    var headingEpNum = episodeNumber(heading);
-
-    // If page returned homepage or wrong episode, try next variant
-    if (!heading || r.url === SITE_BASE + "/" || r.url === SITE_BASE) {
-      log("slug_variant_redirected_home", slugs[index]);
-      return trySlugVariants(slugs, siteEp, index + 1);
-    }
-    if (!isNaN(headingEpNum) && headingEpNum !== siteEp) {
-      log("slug_variant_wrong_episode", slugs[index] + " got ep " + headingEpNum);
-      return trySlugVariants(slugs, siteEp, index + 1);
-    }
-    log("slug_variant_ok", slugs[index]);
-    return { url: r.url, text: heading.slice(0, 80), epNum: siteEp };
-  }).catch(function () {
-    return trySlugVariants(slugs, siteEp, index + 1);
   });
 }
 
@@ -592,12 +623,9 @@ function variantsFromEncodedMaster(masterUrl) {
   var value = String(masterUrl || "");
   var match = value.match(/^(https?:\/\/.+\/)([a-zA-Z0-9]+)_((?:,[a-z0-9]+)+),?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
   if (!match) return [];
-
   var qualities = { l: "360p", n: "480p", h: "720p", x: "1080p" };
   var codes = match[3].split(",").filter(function (c) { return c.length > 0; });
-  var variants = [];
-  var seen = {};
-
+  var variants = [], seen = {};
   for (var i = 0; i < codes.length; i++) {
     var code = String(codes[i] || "").toLowerCase();
     if (code !== "x") continue;
@@ -718,8 +746,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
         jobs.push(resolvePlayer(fr.iframes[i], ctx.seeUrl, ctx.episodeUrl));
       }
       return Promise.all(jobs).then(function (lists) {
-        var flat = [];
-        var seen = {};
+        var flat = [], seen = {};
         for (var k = 0; k < lists.length; k++) {
           for (var j = 0; j < lists[k].length; j++) {
             var item = lists[k][j];
