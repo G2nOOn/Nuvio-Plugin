@@ -1,18 +1,13 @@
 /**
  * TurkMood provider for Nuvio — STRICT 1080p ONLY
- * Version: 1.0.4
- *
- * v1.0.4: - Fixed slug variant ORDER: no "ة" first
- *         - Robust URL validation (decode + check for الحلقة pattern)
- *         - Anchor search uses decoded URLs
- *         - Normalized redirect detection (trailing slash)
+ * Version: 1.0.5
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.0.4";
+var VERSION = "1.0.5";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -24,21 +19,11 @@ var MAX_PROBES = 4;
 var seasonBoundariesCache = {};
 
 var ARABIC_NUM_MAP = {
-  "الاول": "1", "الأول": "1", "واحد": "1", "واحده": "1",
-  "الثاني": "2", "الثانية": "2", "الثانيه": "2", "اثنين": "2",
-  "الثالث": "3", "الثالثة": "3", "الثالثه": "3", "ثلاثة": "3", "ثلاث": "3",
-  "الرابع": "4", "الرابعة": "4", "الرابعه": "4", "اربعة": "4", "أربعة": "4",
-  "الخامس": "5", "الخامسة": "5", "الخامسه": "5", "خمسة": "5", "خمس": "5",
-  "السادس": "6", "السادسة": "6", "السادسه": "6", "ستة": "6", "ست": "6",
-  "السابع": "7", "السابعة": "7", "السابعه": "7", "سبعة": "7", "سبع": "7",
-  "الثامن": "8", "الثامنة": "8", "الثامنه": "8", "ثمانية": "8", "ثمان": "8",
-  "التاسع": "9", "التاسعة": "9", "التاسعه": "9", "تسعة": "9", "تسع": "9",
-  "العاشر": "10", "العاشرة": "10", "العاشره": "10", "عشرة": "10", "عشر": "10",
-  "الحادي عشر": "11", "الثاني عشر": "12",
-  "الثالث عشر": "13", "الرابع عشر": "14", "الخامس عشر": "15",
-  "السادس عشر": "16", "السابع عشر": "17", "السابعة عشر": "17", "السابعه عشر": "17",
-  "الثامن عشر": "18", "التاسع عشر": "19",
-  "العشرون": "20", "العشرين": "20"
+  "الاول": "1", "الأول": "1",
+  "الثاني": "2", "الثالث": "3", "الرابع": "4",
+  "الخامس": "5", "السادس": "6", "السابع": "7",
+  "الثامن": "8", "التاسع": "9", "العاشر": "10",
+  "عشر": "10", "عشرة": "10", "عشرين": "20"
 };
 
 function log(key, value) {
@@ -68,18 +53,6 @@ function cleanUrl(v) {
   return decodeHtml(v).replace(/\\u0026/gi, "&").replace(/\\u003d/gi, "=").replace(/\\\//g, "/").trim();
 }
 
-function safeDecodeUrl(v) {
-  try { return decodeURIComponent(String(v || "")); } catch (_) { return String(v || ""); }
-}
-
-function normalizeFinalUrl(v) {
-  var u = String(v || "").toLowerCase().trim();
-  // strip trailing slash, strip query/hash
-  u = u.split("#")[0].split("?")[0];
-  u = u.replace(/\/+$/, "");
-  return u;
-}
-
 function absUrl(v, base) {
   var url = cleanUrl(v);
   if (!url || /^javascript:/i.test(url) || url.charAt(0) === "#") return "";
@@ -94,8 +67,15 @@ function absUrl(v, base) {
 
 function urlKey(url) {
   var v = String(url || "").split("#")[0].split("?")[0].replace(/\/+$/, "");
-  try { v = decodeURIComponent(v); } catch (_) {}
+  try { v = decodeURIComponent(v); } catch (e) { /* ignore */ }
   return v.toLowerCase();
+}
+
+function safeDecode(v) {
+  var s = String(v || "");
+  var decoded = s;
+  try { decoded = decodeURIComponent(s); } catch (e) { decoded = s; }
+  return decoded;
 }
 
 function headers(referer, origin, accept) {
@@ -129,7 +109,7 @@ function fetchText(url, referer, origin, accept) {
 
 function fetchJson(url, referer, origin) {
   return fetchText(url, referer, origin, "application/json,text/plain,*/*").then(function (r) {
-    try { return JSON.parse(r.html); } catch (_) { throw new Error("invalid_json " + url); }
+    return JSON.parse(r.html);
   });
 }
 
@@ -182,7 +162,8 @@ function extractNumbers(v) {
   if (m) result = result.concat(m);
   var normalized = normalize(text);
   var keys = Object.keys(ARABIC_NUM_MAP);
-  for (var i = 0; i < keys.length; i++) {
+  var i = 0;
+  for (i = 0; i < keys.length; i++) {
     if (normalized.indexOf(normalize(keys[i])) >= 0) {
       result.push(ARABIC_NUM_MAP[keys[i]]);
     }
@@ -191,30 +172,38 @@ function extractNumbers(v) {
 }
 
 function matchScore(field, titles) {
-  var nf = normalize(field), cf = compactTitle(field);
+  var nf = normalize(field);
+  var cf = compactTitle(field);
   if (!nf) return 0;
   var best = 0;
   var fieldNums = extractNumbers(nf);
-  for (var i = 0; i < titles.length; i++) {
+  var i = 0;
+  var j = 0;
+  var k = 0;
+
+  for (i = 0; i < titles.length; i++) {
     var t = compactTitle(titles[i]);
     if (!t || t.length < 2) continue;
-    if (cf === t) best = Math.max(best, 120);
-    else if (nf === normalize(titles[i])) best = Math.max(best, 115);
-    else if (contains(nf, t)) best = Math.max(best, 80);
-    else {
+    if (cf === t) {
+      best = Math.max(best, 120);
+    } else if (nf === normalize(titles[i])) {
+      best = Math.max(best, 115);
+    } else if (contains(nf, t)) {
+      best = Math.max(best, 80);
+    } else {
       var titleNums = extractNumbers(normalize(titles[i]));
-      for (var j = 0; j < fieldNums.length; j++) {
-        for (var k = 0; k < titleNums.length; k++) {
+      for (j = 0; j < fieldNums.length; j++) {
+        for (k = 0; k < titleNums.length; k++) {
           if (fieldNums[j] === titleNums[k] && fieldNums[j].length >= 1) {
             best = Math.max(best, 90);
           }
         }
       }
-      var fieldWords = nf.split(" ").filter(function (w) { return w.length >= 3; });
-      var titleWords = normalize(titles[i]).split(" ").filter(function (w) { return w.length >= 3; });
+      var fieldWords = nf.split(" ");
+      var titleWords = normalize(titles[i]).split(" ");
       var shared = 0;
-      for (var f = 0; f < fieldWords.length; f++) {
-        if (titleWords.indexOf(fieldWords[f]) >= 0) shared++;
+      for (j = 0; j < fieldWords.length; j++) {
+        if (fieldWords[j].length >= 3 && titleWords.indexOf(fieldWords[j]) >= 0) shared++;
       }
       if (shared >= 1) best = Math.max(best, 70);
     }
@@ -236,7 +225,11 @@ function seasonFromText(t) {
   if (!v) return NaN;
   var ord = { "الاول": 1, "الأول": 1, "الثاني": 2, "الثالث": 3, "الرابع": 4, "الخامس": 5, "السادس": 6, "السابع": 7, "الثامن": 8, "التاسع": 9, "العاشر": 10 };
   var m = v.match(/(?:الجزء|الموسم|موسم)\s+(الأول|الاول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)/i);
-  if (m) { if (ord[m[1]]) return ord[m[1]]; var n = m[1].replace(/أ/g, "ا"); if (ord[n]) return ord[n]; }
+  if (m) {
+    if (ord[m[1]]) return ord[m[1]];
+    var n = m[1].replace(/أ/g, "ا");
+    if (ord[n]) return ord[n];
+  }
   m = v.match(/(?:الجزء|الموسم|موسم)\s*[:\-]?\s*(\d{1,2})/i);
   if (m) return parseInt(m[1], 10);
   m = v.match(/(?:season|part)\s*[:\-]?\s*(\d{1,2})/i);
@@ -253,32 +246,50 @@ function getTmdbBoundaries(tmdbId) {
   var showUrl = TMDB_API_BASE + "/tv/" + encodeURIComponent(tmdbId) + "?api_key=" + TMDB_API_KEY + "&language=en-US";
   return fetchJson(showUrl, "", "").then(function (show) {
     var seasons = (show && show.seasons) || [];
-    seasons = seasons.filter(function (s) { return s && typeof s.season_number === "number" && s.season_number > 0; });
+    seasons = seasons.filter(function (s) {
+      return s && typeof s.season_number === "number" && s.season_number > 0;
+    });
     seasons.sort(function (a, b) { return a.season_number - b.season_number; });
     if (!seasons.length) return [];
     var jobs = [];
-    for (var i = 0; i < seasons.length; i++) {
-      (function (sn) {
-        var url = TMDB_API_BASE + "/tv/" + encodeURIComponent(tmdbId) + "/season/" + sn + "?api_key=" + TMDB_API_KEY + "&language=en-US";
-        jobs.push(fetchJson(url, "", "").then(function (d) { return d && d.episodes ? d.episodes.length : 0; }).catch(function () { return 0; }));
-      })(seasons[i].season_number);
+    var i = 0;
+    for (i = 0; i < seasons.length; i++) {
+      jobs.push(fetchSeasonCount(tmdbId, seasons[i].season_number));
     }
     return Promise.all(jobs).then(function (counts) {
-      var b = [], cum = 0;
-      for (var j = 0; j < counts.length; j++) { cum += counts[j]; b.push(cum); }
+      var b = [];
+      var cum = 0;
+      var j = 0;
+      for (j = 0; j < counts.length; j++) { cum += counts[j]; b.push(cum); }
       log("tmdb_boundaries", b.join(","));
       seasonBoundariesCache[ck] = b;
       return b;
     });
-  }).catch(function (e) { logFailure("tmdb_boundaries_failed", errMsg(e)); return []; });
+  }).catch(function (e) {
+    logFailure("tmdb_boundaries_failed", errMsg(e));
+    return [];
+  });
+}
+
+function fetchSeasonCount(tmdbId, seasonNum) {
+  var url = TMDB_API_BASE + "/tv/" + encodeURIComponent(tmdbId) + "/season/" + seasonNum + "?api_key=" + TMDB_API_KEY + "&language=en-US";
+  return fetchJson(url, "", "").then(function (d) {
+    return (d && d.episodes) ? d.episodes.length : 0;
+  }).catch(function () { return 0; });
 }
 
 function siteEpisodeNumber(ws, we, boundaries) {
   if (ws <= 1) return we;
   var off = 0;
-  if (boundaries.length >= ws - 1) { for (var i = 0; i < ws - 1; i++) off += boundaries[i]; }
-  else if (boundaries.length > 0) { for (var j = 0; j < boundaries.length; j++) off += boundaries[j]; off += (ws - 1 - boundaries.length) * 13; }
-  else { off = (ws - 1) * 13; }
+  var i = 0;
+  if (boundaries.length >= ws - 1) {
+    for (i = 0; i < ws - 1; i++) off += boundaries[i];
+  } else if (boundaries.length > 0) {
+    for (i = 0; i < boundaries.length; i++) off += boundaries[i];
+    off += (ws - 1 - boundaries.length) * 13;
+  } else {
+    off = (ws - 1) * 13;
+  }
   return off + we;
 }
 
@@ -293,27 +304,53 @@ function parseTmdbPage(html) {
 }
 
 function parseTmdbAltTitles(html) {
-  var $ = cheerio.load(html), titles = [];
+  var $ = cheerio.load(html);
+  var titles = [];
   $("table.titles tbody tr").each(function (_, el) {
-    var row = wrap($, el), cells = row.find("td"), v = cells.first().text();
+    var row = wrap($, el);
+    var cells = row.find("td");
+    var v = cells.first().text();
     if (v) titles.push(v.replace(/\s+/g, " ").trim());
   });
   return titles;
 }
 
 function getTmdbMetadata(tmdbId) {
-  var langs = ["tr-TR", "en-US", "ar-SA"], jobs =    if [];
-  for (var i = 0; i < ( langs.length; i++) {
-    jobs.pushidx(fetchText(TMDB >=_BASE + "/tv/" + metadata encodeURIComponent(tmdbId) + "?language=" + langs[i], "", "")
-      .then(function (r) { return parseTmdbPage(r.html); }).catch(function () { return { title: "", year: 0 }; }));
+  var langs = ["tr-TR", "en-US", "ar-SA"];
+  var jobs = [];
+  var i = 0;
+  for (i = 0; i < langs.length; i++) {
+    jobs.push(fetchTmdbPageForLang(tmdbId, langs[i]));
   }
   var aliasesJob = fetchText(TMDB_BASE + "/tv/" + encodeURIComponent(tmdbId) + "/titles?language=en-US", "", "")
-    .then(function (r) { return parseTmdbAltTitles(r.html); }).catch(function () { return []; });
+    .then(function (r) { return parseTmdbAltTitles(r.html); })
+    .catch(function () { return []; });
+
   return Promise.all([Promise.all(jobs), aliasesJob]).then(function (parts) {
-    var pages = parts[0] || [], aliases = parts[1] || [], titles = [], seen = {}, year = 0;
-    for (var p = 0; p < pages.length; p++) { addTitle(titles, seen, pages[p].title); if (!year && pages[p].year) year = pages[p].year; }
-    for (var a = 0; a < aliases.length && titles.length < 50; a++) addTitle(titles, seen, aliases[a]);
+    var pages = parts[0] || [];
+    var aliases = parts[1] || [];
+    var titles = [];
+    var seen = {};
+    var year = 0;
+    var p = 0;
+    var a = 0;
+    for (p = 0; p < pages.length; p++) {
+      addTitle(titles, seen, pages[p].title);
+      if (!year && pages[p].year) year = pages[p].year;
+    }
+    for (a = 0; a < aliases.length && titles.length < 50; a++) {
+      addTitle(titles, seen, aliases[a]);
+    }
     return { titles: titles, year: year };
+  });
+}
+
+function fetchTmdbPageForLang(tmdbId, lang) {
+  var url = TMDB_BASE + "/tv/" + encodeURIComponent(tmdbId) + "?language=" + lang;
+  return fetchText(url, "", "").then(function (r) {
+    return parseTmdbPage(r.html);
+  }).catch(function () {
+    return { title: "", year: 0 };
   });
 }
 
@@ -321,56 +358,47 @@ function getTmdbMetadata(tmdbId) {
 function searchSite(query) {
   var url = SITE_BASE + "/?s=" + encodeURIComponent(query);
   return fetchText(url, SITE_BASE + "/", "").then(function (r) {
-    var $ = cheerio.load(r.html);
-    var cards = [], seen = {};
-    $('a[href*="/series/"]').each(function (_, el) {
-      var a = wrap($, el);
-      var u = absUrl(a.attr("href"), r.url);
-      if (!u || seen[urlKey(u)]) return;
-      var title = a.attr("title") || a.text() || "";
-      var img = a.find("img").first();
-      var alt = img.attr("alt") || "";
-      seen[urlKey(u)] = true;
-      cards.push({ url: u, title: title.trim(), combined: title + " " + alt });
-    });
-    return cards;
+    return parseCardsFromHtml(r.html, r.url);
   });
 }
 
 function fetchShowPage(pageNum) {
-  var url = pageNum > 1
-    ? SITE_BASE + "/show/page/" + pageNum + "/"
-    : SITE_BASE + "/show/";
+  var url;
+  if (pageNum > 1) {
+    url = SITE_BASE + "/show/page/" + pageNum + "/";
+  } else {
+    url = SITE_BASE + "/show/";
+  }
   return fetchText(url, SITE_BASE + "/", "").then(function (r) {
-    var $ = cheerio.load(r.html);
-    var cards = [], seen = {};
-    $('a[href*="/series/"]').each(function (_, el) {
-      var a = wrap($, el);
-      var u = absUrl(a.attr("href"), r.url);
-      if (!u || seen[urlKey(u)]) return;
-      var title = a.attr("title") || a.text() || "";
-      var img = a.find("img").first();
-      var alt = img.attr("alt") || "";
-      seen[urlKey(u)] = true;
-      cards.push({ url: u, title: title.trim(), combined: title + " " + alt });
-    });
-    return { cards: cards, url: r.url };
+    return { cards: parseCardsFromHtml(r.html, r.url), url: r.url };
   });
 }
 
+function parseCardsFromHtml(html, pageUrl) {
+  var $ = cheerio.load(html);
+  var cards = [];
+  var seen = {};
+  $('a[href*="/series/"]').each(function (_, el) {
+    var a = wrap($, el);
+    var u = absUrl(a.attr("href"), pageUrl);
+    if (!u || seen[urlKey(u)]) return;
+    var title = a.attr("title") || a.text() || "";
+    var img = a.find("img").first();
+    var alt = img.attr("alt") || "";
+    seen[urlKey(u)] = true;
+    cards.push({ url: u, title: title.trim(), combined: title + " " + alt });
+  });
+  return cards;
+}
+
 function findSeries(metadata) {
-  var results = [], seen = {};
+  var results = [];
+  var seen = {};
 
   function trySearch(idx) {
-.titles.length) return tryPagination(1);
+    if (idx >= metadata.titles.length) return tryPagination(1);
     return searchSite(metadata.titles[idx]).then(function (cards) {
-      for (var i = 0; i < cards.length; i++) {
-        var score = matchScore(cards[i].combined, metadata.titles);
-        if (score >= 70 && !seen[urlKey(cards[i].url)]) {
-          seen[urlKey(cards[i].url)] = true;
-          results.push({ url: cards[i].url, title: cards[i].title, score: score });
-        }
-      }
+      collectMatches(cards, metadata, results, seen);
       if (results.length) {
         results.sort(function (a, b) { return b.score - a.score; });
         return results[0];
@@ -385,14 +413,7 @@ function findSeries(metadata) {
       return results.length ? results[0] : null;
     }
     return fetchShowPage(pageNum).then(function (r) {
-      for (var i = 0; i < r.cards.length; i++) {
-        var c = r.cards[i];
-        var score = matchScore(c.combined, metadata.titles);
-        if (score >= 70 && !seen[urlKey(c.url)]) {
-          seen[urlKey(c.url)] = true;
-          results.push({ url: c.url, title: c.title, score: score });
-        }
-      }
+      collectMatches(r.cards, metadata, results, seen);
       if (results.length > 0 && pageNum >= 2) {
         results.sort(function (a, b) { return b.score - a.score; });
         return results[0];
@@ -404,124 +425,80 @@ function findSeries(metadata) {
   return trySearch(0);
 }
 
-// ====== v1.0.4: REORDERED slug variants (no-ة first) ======
-function buildSlugVariants(seriesUrl) {
-  var slugMatch = String(seriesUrl || "").match(/\/series\/([^\/]+)\/?$/);
-  if (!slugMatch) return [];
-  
-  var rawSlug = "";
-  try { rawSlug = decodeURIComponent(slugMatch[1]); } catch (_) { rawSlug = slugMatch[1]; }
-  var cleanSlug = rawSlug.replace(/^مسلسل-/, "");
-  
-  var variants = [];
-  var seen = {};
-  
-  function add(v) {
-    var k = String(v || "").trim();
-    if (k && !seen[k]) { seen[k] = true; variants.push(k); }
+function collectMatches(cards, metadata, results, seen) {
+  var i = 0;
+  for (i = 0; i < cards.length; i++) {
+    var c = cards[i];
+    var score = matchScore(c.combined, metadata.titles);
+    if (score >= 70 && !seen[urlKey(c.url)]) {
+      seen[urlKey(c.url)] = true;
+      results.push({ url: c.url, title: c.title, score: score });
+    }
   }
-  
-  // Priority 1: remove ALL "ة"
-  add(cleanSlug.replace(/ة/g, ""));
-  // Priority 2: remove trailing "ة" only
-  add(cleanSlug.replace(/ة$/, "").replace(/ة-/, "-"));
-  // Priority 3: original
-  add(cleanSlug);
-  
-  return variants;
 }
 
-// ====== v1.0.4: STRICT URL validation ======
-function trySlugVariants(slugs, siteEp, index) {
-  if (!slugs || index >= slugs.length) {
-    logFailure("no_slug_variant_matched");
+// ====== EPISODE URL (simplified v1.0.5) ======
+function findEpisodeUrl(series, siteEp) {
+  var slugMatch = String(series.url || "").match(/\/series\/([^\/]+)\/?$/);
+  if (!slugMatch) {
+    logFailure("no_slug_match", series.url);
     return Promise.resolve(null);
   }
-  var guess = SITE_BASE + "/" + encodeURIComponent(slugs[index] + "-الحلقة-" + siteEp) + "/";
-  log("try_slug_variant", "[" + index + "] " + slugs[index]);
-  
-  return fetchText(guess, SITE_BASE + "/", "").then(function (r) {
-    var finalUrl = String(r.url || "");
-    var finalDecoded = safeDecodeUrl(finalUrl);
-    var normalizedFinal = normalizeFinalUrl(finalUrl);
-    var normalizedBase = normalizeFinalUrl(SITE_BASE);
-    
-    // Check 1: redirected to homepage
-    if (normalizedFinal === normalizedBase) {
-      log("slug_variant_redirected_home", "[" + index + "]");
-      return trySlugVariants(slugs, siteEp, index + 1);
-    }
-    
-    // Check 2: URL must contain "الحلقة" (decoded)
-    if (finalDecoded.indexOf("الحلقة") < 0 && finalDecoded.indexOf("حلقة") < 0) {
-      log("slug_variant_no_episode_in_url", finalDecoded.slice(0, 80));
-      return trySlugVariants(slugs, siteEp, index + 1);
-    }
-    
-    // Check 3: page heading must match the episode
-    var $ = cheerio.load(r.html);
-    var heading = [$("h1").first().text(), $("title").first().text()].join(" ").trim();
-    var headingEpNum = episodeNumber(heading);
-    if (!isNaN(headingEpNum) && headingEpNum !== siteEp) {
-      log("slug_variant_wrong_episode", "got " + headingEpNum + " wanted " + siteEp);
-      return trySlugVariants(slugs, siteEp, index + 1);
-    }
-    
-    log("slug_variant_ok", "[" + index + "] " + finalDecoded.slice(0, 100));
-    return { url: r.url, text: heading.slice(0, 80), epNum: siteEp };
-  }).catch(function (e) {
-    logFailure("slug_variant_fetch_failed", "[" + index + "] " + errMsg(e));
-    return trySlugVariants(slugs, siteEp, index + 1);
-  });
+
+  var rawSlug = safeDecode(slugMatch[1]);
+  var cleanSlug = rawSlug.replace(/^مسلسل-/, "");
+  var noTaSlug = cleanSlug.replace(/ة/g, "");
+
+  var variants = [];
+  variants.push(noTaSlug);
+  if (cleanSlug !== noTaSlug) variants.push(cleanSlug);
+
+  log("slug_variants", variants.join(" || "));
+
+  return tryVariants(variants, siteEp, 0);
 }
 
-// ====== v1.0.4: search anchors with DECODED hrefs ======
-function findEpisodeUrl(series, siteEp) {
-  return fetchText(series.url, SITE_BASE + "/", "").then(function (r) {
-    var $ = cheerio.load(r.html);
-    var candidates = [], seen = {};
+function tryVariants(variants, siteEp, index) {
+  if (index >= variants.length) {
+    logFailure("all_variants_failed");
+    return Promise.resolve(null);
+  }
 
-    $('a').each(function (_, el) {
-      var a = wrap($, el);
-      var href = a.attr("href") || "";
-      if (!href) return;
-      
-      var u = absUrl(href, r.url);
-      if (!u || seen[urlKey(u)]) return;
-      
-      var decoded = safeDecodeUrl(u);
-      
-      // Must be an episode URL
-      if (decoded.indexOf("الحلقة") < 0 && decoded.indexOf("حلقة") < 0) return;
-      // Must be on krmz.onl
-      if (u.indexOf("krmz.onl") < 0) return;
-      // Skip /see/
-      if (u.indexOf("/see/") >= 0) return;
-      
-      var text = (a.text() || "").trim();
-      var title = a.attr("title") || "";
-      var identity = text + " " + title + " " + decoded;
-      var epNum = episodeNumber(identity);
-      
-      if (!isNaN(epNum) && epNum === siteEp) {
-        seen[urlKey(u)] = true;
-        candidates.push({ url: u, text: text, identity: identity, epNum: epNum });
-      }
-    });
+  var slug = variants[index];
+  var guess = SITE_BASE + "/" + encodeURIComponent(slug + "-الحلقة-" + siteEp) + "/";
+  log("try_variant", "[" + index + "] " + slug);
 
-    log("episode_candidates_from_series", candidates.length);
-    if (candidates.length > 0) {
-      log("episode_found_via_link", candidates[0].url.slice(0, 100));
-      return candidates[0];
+  return fetchText(guess, SITE_BASE + "/", "").then(function (r) {
+    var finalUrl = String(r.url || "").toLowerCase();
+    var finalNorm = finalUrl.split("#")[0].split("?")[0].replace(/\/+$/, "");
+    var baseNorm = SITE_BASE.toLowerCase().replace(/\/+$/, "");
+
+    if (finalNorm === baseNorm) {
+      log("variant_home_redirect", "[" + index + "]");
+      return tryVariants(variants, siteEp, index + 1);
     }
 
-    // Fallback: slug variants
-    var variants = buildSlugVariants(series.url);
-    log("slug_variants", variants.join(" | "));
-    return trySlugVariants(variants, siteEp, 0);
+    var decodedUrl = safeDecode(r.url || "");
+    var hasEpisode = decodedUrl.indexOf("الحلقة") >= 0 || decodedUrl.indexOf("حلقة") >= 0;
+    if (!hasEpisode) {
+      log("variant_no_episode_url", "[" + index + "]");
+      return tryVariants(variants, siteEp, index + 1);
+    }
+
+    var $ = cheerio.load(r.html);
+    var headingText = $("h1").first().text() + " " + $("title").first().text();
+    var headingEp = episodeNumber(headingText);
+
+    if (!isNaN(headingEp) && headingEp !== siteEp) {
+      log("variant_wrong_ep", "got " + headingEp + " wanted " + siteEp);
+      return tryVariants(variants, siteEp, index + 1);
+    }
+
+    log("variant_ok", "[" + index + "] " + slug);
+    return { url: r.url, text: headingText.slice(0, 80), epNum: siteEp };
   }).catch(function (e) {
-    logFailure("series_page_failed", errMsg(e));
-    return null;
+    logFailure("variant_fetch_failed", errMsg(e));
+    return tryVariants(variants, siteEp, index + 1);
   });
 }
 
@@ -536,7 +513,7 @@ function extractSeeUrl(episodeUrl) {
       if (u) seeUrl = u;
     });
     if (!seeUrl) seeUrl = episodeUrl.replace(/\/$/, "") + "/see/";
-    return { seeUrl: seeUrl, episodeUrl: r.url, html: r.html };
+    return { seeUrl: seeUrl, episodeUrl: r.url };
   }).catch(function (e) {
     logFailure("episode_page_failed", errMsg(e));
     return null;
@@ -547,7 +524,8 @@ function extractSeeUrl(episodeUrl) {
 function extractIframes(seeUrl, episodeUrl) {
   return fetchText(seeUrl, episodeUrl, originOf(episodeUrl)).then(function (r) {
     var $ = cheerio.load(r.html);
-    var iframes = [], seen = {};
+    var iframes = [];
+    var seen = {};
 
     $("iframe[src]").each(function (_, el) {
       var u = absUrl($(el).attr("src"), r.url);
@@ -563,7 +541,8 @@ function extractIframes(seeUrl, episodeUrl) {
         /https?:\/\/[^"'\\\s<>]*cdnplus[^"'\\\s<>]*/gi,
         /https?:\/\/[^"'\\\s<>]*mp4plus[^"'\\\s<>]*/gi
       ];
-      for (var p = 0; p < patterns.length; p++) {
+      var p = 0;
+      for (p = 0; p < patterns.length; p++) {
         var m;
         while ((m = patterns[p].exec(html)) !== null) {
           var u2 = cleanUrl(m[0]);
@@ -575,7 +554,7 @@ function extractIframes(seeUrl, episodeUrl) {
     }
 
     log("iframes_found", iframes.length);
-    return { iframes: iframes, html: r.html, url: r.url };
+    return { iframes: iframes, url: r.url };
   }).catch(function (e) {
     logFailure("see_page_failed", errMsg(e));
     return null;
@@ -612,10 +591,10 @@ function extractMasterUrl(playerUrl, referer) {
     }
 
     log("masters_found", masterUrls.length);
-    return { masterUrls: masterUrls, playerUrl: r.url, html: html };
+    return { masterUrls: masterUrls, playerUrl: r.url };
   }).catch(function (e) {
-    logFailure("player_fetch_failed", playerUrl + " " + errMsg(e));
-    return { masterUrls: [], playerUrl: playerUrl, html: "" };
+    logFailure("player_fetch_failed", errMsg(e));
+    return { masterUrls: [], playerUrl: playerUrl };
   });
 }
 
@@ -624,9 +603,11 @@ function variantsFromEncodedMaster(masterUrl) {
   var match = value.match(/^(https?:\/\/.+\/)([a-zA-Z0-9]+)_((?:,[a-z0-9]+)+),?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
   if (!match) return [];
   var qualities = { l: "360p", n: "480p", h: "720p", x: "1080p" };
-  var codes = match[3].split(",").filter(function (c) { return c.length > 0; });
-  var variants = [], seen = {};
-  for (var i = 0; i < codes.length; i++) {
+  var codes = match[3].split(",");
+  var variants = [];
+  var seen = {};
+  var i = 0;
+  for (i = 0; i < codes.length; i++) {
     var code = String(codes[i] || "").toLowerCase();
     if (code !== "x") continue;
     if (!qualities[code] || seen[code]) continue;
@@ -639,12 +620,14 @@ function variantsFromEncodedMaster(masterUrl) {
   return variants;
 }
 
-function resolvePlayer(iframe, seeUrl, episodeUrl) {
+function resolvePlayer(iframe, seeUrl) {
   return extractMasterUrl(iframe.url, seeUrl).then(function (r) {
     var streams = [];
-    for (var i = 0; i < r.masterUrls.length; i++) {
+    var i = 0;
+    var j = 0;
+    for (i = 0; i < r.masterUrls.length; i++) {
       var variants = variantsFromEncodedMaster(r.masterUrls[i]);
-      for (var j = 0; j < variants.length; j++) {
+      for (j = 0; j < variants.length; j++) {
         streams.push({
           url: variants[j].url,
           quality: variants[j].quality,
@@ -653,7 +636,7 @@ function resolvePlayer(iframe, seeUrl, episodeUrl) {
         });
       }
     }
-    log("player_resolved", iframe.label + " → " + streams.length);
+    log("player_resolved", iframe.label + " -> " + streams.length);
     return streams;
   });
 }
@@ -673,10 +656,10 @@ function streamObject(url, quality, serverName) {
   };
   return {
     name: "TurkMood",
-    title: "TurkMood • " + label + " • " + q,
+    title: "TurkMood | " + label + " | " + q,
     url: url,
     provider: "TurkMood",
-    language: "🇮🇶",
+    language: "IQ",
     quality: q,
     type: "m3u8",
     headers: h
@@ -707,27 +690,43 @@ function getStreams(tmdbId, mediaType, season, episode) {
   log("tmdb_id", id);
   log("request", "S" + ws + "E" + we);
 
-  var ctx = { metadata: null, series: null, siteEp: 0, episodeUrl: null, seeUrl: null, iframes: null };
+  var ctx = {
+    metadata: null,
+    series: null,
+    siteEp: 0,
+    episodeUrl: null,
+    seeUrl: null,
+    iframes: null
+  };
 
   return getTmdbMetadata(id)
     .then(function (meta) {
       ctx.metadata = meta;
       log("titles", meta.titles.join(" | "));
-      if (!meta.titles.length) { logFailure("no_titles"); return null; }
+      if (!meta.titles.length) {
+        logFailure("no_titles");
+        return null;
+      }
       return getTmdbBoundaries(id).then(function (b) {
         ctx.siteEp = siteEpisodeNumber(ws, we, b);
-        log("site_episode", "S" + ws + "E" + we + " → " + ctx.siteEp);
+        log("site_episode", "S" + ws + "E" + we + " -> " + ctx.siteEp);
         return findSeries(meta);
       });
     })
     .then(function (series) {
-      if (!series) { logFailure("series_not_found"); return null; }
+      if (!series) {
+        logFailure("series_not_found");
+        return null;
+      }
       ctx.series = series;
       log("matched_series", series.url);
       return findEpisodeUrl(series, ctx.siteEp);
     })
     .then(function (ep) {
-      if (!ep) { logFailure("episode_not_found"); return null; }
+      if (!ep) {
+        logFailure("episode_not_found");
+        return null;
+      }
       ctx.episodeUrl = ep.url;
       log("episode_url", ep.url);
       return extractSeeUrl(ep.url);
@@ -739,16 +738,23 @@ function getStreams(tmdbId, mediaType, season, episode) {
       return extractIframes(see.seeUrl, see.episodeUrl);
     })
     .then(function (fr) {
-      if (!fr || !fr.iframes.length) { logFailure("no_iframes"); return []; }
+      if (!fr || !fr.iframes.length) {
+        logFailure("no_iframes");
+        return [];
+      }
       ctx.iframes = fr.iframes;
       var jobs = [];
-      for (var i = 0; i < fr.iframes.length && i < MAX_PROBES; i++) {
-        jobs.push(resolvePlayer(fr.iframes[i], ctx.seeUrl, ctx.episodeUrl));
+      var i = 0;
+      for (i = 0; i < fr.iframes.length && i < MAX_PROBES; i++) {
+        jobs.push(resolvePlayer(fr.iframes[i], ctx.seeUrl));
       }
       return Promise.all(jobs).then(function (lists) {
-        var flat = [], seen = {};
-        for (var k = 0; k < lists.length; k++) {
-          for (var j = 0; j < lists[k].length; j++) {
+        var flat = [];
+        var seen = {};
+        var k = 0;
+        var j = 0;
+        for (k = 0; k < lists.length; k++) {
+          for (j = 0; j < lists[k].length; j++) {
             var item = lists[k][j];
             if (seen[item.url]) continue;
             seen[item.url] = true;
@@ -759,7 +765,9 @@ function getStreams(tmdbId, mediaType, season, episode) {
       });
     })
     .then(function (streams) {
-      var filtered = (streams || []).filter(function (s) { return (s.quality || "") === "1080p"; });
+      var filtered = (streams || []).filter(function (s) {
+        return (s.quality || "") === "1080p";
+      });
       var sorted = sortStreams(filtered);
       if (!sorted.length) logFailure("no_1080p_sources");
       log("streams_found", sorted.length);
