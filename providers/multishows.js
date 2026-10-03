@@ -1,12 +1,11 @@
 /**
- * MultiShows Nuvio Provider v3.2 — Ad-Wall Bypass & Download Links Fix
+ * MultiShows Nuvio Provider v3.3 — Fixed QuickJS Syntax Error
  * https://multishows.top — Movies / TV / Anime
  *
- * v3.2 FIXES:
- * ✅ Bypass ad-wall (no more early abort on "Choose Security Mode")
- * ✅ Fixed episode URL finder to handle both absolute & relative links
- * ✅ Improved download-link detection & quality classification
- * ✅ Strict 4K / 1080p filter preserved
+ * v3.3 FIXES:
+ * ✅ Removed getInvertedSortTag (invisible unicode broke QuickJS parser)
+ * ✅ Uses plain sort via final.sort()
+ * ✅ All v3.2 features preserved (ad-wall bypass, download extraction)
  */
 
 var BASE = "https://multishows.top";
@@ -121,14 +120,8 @@ function fetchText(url) {
     });
 }
 
-function getInvertedSortTag(score, maxScore) {
-    maxScore = maxScore || 999999;
-    var inv = Math.max(0, maxScore - Math.max(0, parseInt(score, 10) || 0));
-    var bin = inv.toString(2);
-    while (bin.length < 20) bin = "0" + bin;
-    var chars = [];
-    for (var i = 0; i < bin.length; i++) chars.push(bin.charAt(i) === "1" ? "" : "");
-    return chars.join("");
+function isWall(html) {
+    return /choose security mode|disable your ad-blocker|ad detector/i.test(String(html || "").slice(0, 8000));
 }
 
 // ── Entry Point ───────────────────────────────────────────────────────────────
@@ -154,7 +147,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
 
         return findPageUrl(info, type).then(function (pageUrl) {
             if (!pageUrl) {
-                console.log("[multishows] no page found (slug + search failed)");
+                console.log("[multishows] no page found");
                 return [];
             }
             console.log("[multishows] page: " + pageUrl);
@@ -166,7 +159,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
             return watchPromise.then(function (watchUrl) {
                 if (!watchUrl) { console.log("[multishows] episode page not found"); return []; }
                 return fetchText(watchUrl).then(function (html) {
-                    // ✅ v3.2: DO NOT abort on ad-wall — try to extract anyway
                     console.log("[multishows] fetching watch page: " + watchUrl);
                     return buildStreams(html, watchUrl, settings);
                 });
@@ -178,7 +170,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
     });
 }
 
-// ── TMDB: id → title/year ────────────────────────────────────────────────────
+// ── TMDB ─────────────────────────────────────────────────────────────────────
 function resolveTmdbInfo(id, type) {
     var key = getTmdbKey();
     function fromTmdb(d) {
@@ -217,7 +209,6 @@ function findPageUrl(info, type) {
         if (i >= slugs.length) return searchSite(info, kind);
         var url = BASE + "/" + kind + "/" + slugs[i];
         return fetchText(url).then(function (html) {
-            // ✅ v3.2: don't abort on ad-wall — check for content markers anyway
             if (/og:title|canonical|<article|post-title|episode/i.test(html) &&
                 !/404|not found|page not/i.test(stripTags(html).slice(0, 400))) {
                 console.log("[multishows] slug hit: " + url);
@@ -282,19 +273,16 @@ function pickBest(results, info, wantKind) {
     return (best && bestScore >= 6) ? best : null;
 }
 
-// ── Episode URL (v3.2: no early abort) ────────────────────────────────────────
+// ── Episode URL ──────────────────────────────────────────────────────────────
 function findEpisodeUrl(showUrl, season, episode) {
     return fetchText(showUrl).then(function (html) {
-        // ✅ v3.2: no early return on ad-wall
         var re = /href="((?:https?:\/\/(?:www\.)?multishows\.top)?\/episode\/[^"?#]+)"/gi;
         var m, found = "";
         var want = "/" + season + "-" + episode;
 
         while ((m = re.exec(html)) !== null) {
             var u = m[1];
-            // Handle relative URLs
             if (u.charAt(0) === "/") u = BASE + u;
-            // Match format: /episode/{slug}/{season}-{episode}
             if (u.substring(u.length - want.length) === want ||
                 new RegExp("\\/" + season + "-" + episode + "(?:[\\/?#\"]|$)").test(u)) {
                 found = u;
@@ -307,11 +295,10 @@ function findEpisodeUrl(showUrl, season, episode) {
             return found;
         }
 
-        // Fallback: build URL manually
         var slugMatch = showUrl.match(/\/tv-show\/([^\/]+)\/?$/);
         if (slugMatch) {
             var guessed = BASE + "/episode/" + slugMatch[1] + "/" + season + "-" + episode;
-            console.log("[multish(ows] episode url guessed: " + guessed);
+            console.log("[multishows] episode url guessed: " + guessed);
             return guessed;
         }
 
@@ -320,25 +307,21 @@ function findEpisodeUrl(showUrl, season, episode) {
 }
 
 // ── Extract candidates ────────────────────────────────────────────────────────
-function collectCandidates(html, pageUrl, streams, downloads,html seenS, seenD) {
-,    var m;
-    // Pattern C: direct file URLs (m3u8 / mp4 / mkv) — these are rare on MultiShows
-    var re pageFile = /(https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4|mkv|webm)(?:\?[^\s"'<>\\]*)?)/gi;
+function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
+    var m;
+    var reFile = /(https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4|mkv|webm)(?:\?[^\s"'<>\\]*)?)/gi;
     while ((m = reFile.exec(html)) !== null) {
         if (!seenS[m[1]]) { streams.push({ url: m[1], label: "" }); seenS[m[1]] = true; }
     }
 
-    // Pattern D (v3.2 improved): download links — look for <a> tags near "Download" or "تحميل"
     var reDl = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]{0,200}?)<\/a>/gi;
     while ((m = reDl.exec(html)) !== null) {
         var hu = absUrl(m[1], pageUrl);
         var txt = stripTags(m[2]);
         if (!hu || seenD[hu]) continue;
-        // Accept if text or URL mentions download, or URL looks like a file host
         if (/download|تحميل|dl\.|gdflix|hubcloud|pixeldrain|file/i.test(hu) ||
             /download|تحميل/i.test(txt) ||
             /\.(?:mp4|mkv|m3u8)(?:\?|$)/i.test(hu)) {
-            // Try to extract quality from the anchor text (e.g. "2160p DoVi HDR HEVC...")
             var q = "";
             if (Q4K.test(txt)) q = "4K";
             else if (Q1080.test(txt)) q = "1080p";
@@ -349,7 +332,7 @@ function collectCandidates(html, pageUrl, streams, downloads,html seenS, seenD) 
 }
 
 // ── Build streams ─────────────────────────────────────────────────────────────
-function buildStreamsUrl, settings) {
+function buildStreams(html, pageUrl, settings) {
     var streams = [], downloads = [];
     var seenS = {}, seenD = {};
 
@@ -357,7 +340,6 @@ function buildStreamsUrl, settings) {
     console.log("[multishows] page gave " + streams.length + " stream candidate(s), " +
         downloads.length + " download(s)");
 
-    // Filter & format
     function fq(list, isDl) {
         var out = [], seen = {};
         for (var i = 0; i < list.length; i++) {
@@ -370,18 +352,22 @@ function buildStreamsUrl, settings) {
             seen[it.url] = true;
             out.push({ url: it.url, label: it.label, quality: q, dl: !!isDl });
         }
-        out.sort(function (a, b) { return a.quality === b.quality ? 0 : (a.quality === "4K" ? -1 : 1); });
         return out;
     }
 
-    // Dedup: if a download URL is also in streams, prefer the download entry
     var dlUrls = {};
     for (var di = 0; di < downloads.length; di++) dlUrls[downloads[di].url] = true;
     var uniqueStreams = streams.filter(function (s) { return !dlUrls[s.url]; });
 
     var final = fq(uniqueStreams, false);
     if (settings.directDownload) final = final.concat(fq(downloads, true));
-    if (!final.length) final = fq(downloads, true); // safety fallback
+    if (!final.length) final = fq(downloads, true);
+
+    // Sort: 4K first
+    final.sort(function (a, b) {
+        if (a.quality === b.quality) return 0;
+        return a.quality === "4K" ? -1 : 1;
+    });
 
     console.log("[multishows] final streams: " + final.length +
         " (streams " + final.filter(function (x) { return !x.dl; }).length +
@@ -391,17 +377,16 @@ function buildStreamsUrl, settings) {
         var qUp = s.quality.toUpperCase();
         var host = "CDN";
         try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch (e) {}
-        var tag = s.dl ? "⬇ Direct" : "MultiShows";
-        var mainTitle = [tag, qUp, host].join(" • ");
-        var sub = [stripTags(s.label), /\.m3u8(\?|$)/i.test(s.url) ? "HLS" : /\.mkv(\?|$)/i.test(s.url) ? "MKV" : "MP4"].filter(Boolean).join("\n");
+        var tag = s.dl ? "Direct" : "MultiShows";
+        var mainTitle = tag + " | " + qUp + " | " + host;
+        var sub = [stripTags(s.label), /\.m3u8(\?|$)/i.test(s.url) ? "HLS" : /\.mkv(\?|$)/i.test(s.url) ? "MKV" : "MP4"].filter(Boolean).join(" | ");
         return {
-            name: getInvertedSortTag(s.quality === "4K" ? 2 : 1, 10) + mainTitle,
+            name: mainTitle,
             title: mainTitle,
             size: sub,
             url: s.url,
             quality: qUp,
-            headers: { "User-Agent": UA, "Referer": pageUrl, "Origin": BASE, "Accept": "*/*" },
-            _host: host
+            headers: { "User-Agent": UA, "Referer": pageUrl, "Origin": BASE, "Accept": "*/*" }
         };
     });
 }
