@@ -45,7 +45,7 @@
       "id": "multishows",
       "name": "Multishows",
       "description": "Multishows — krmz.onl | STRICT 1080p ONLY",
-      "version": "1.0.10",
+      "version": "3.2.0",
       "author": "LO",
       "supportedTypes": ["tv"],
       "filename": "providers/multishows.js",
