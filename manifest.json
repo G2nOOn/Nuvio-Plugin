@@ -42,13 +42,13 @@
       "contentLanguage": ["en"]
     },
     {
-      "id": "turkmood",
-      "name": "TurkMood",
-      "description": "TurkMood — krmz.onl | STRICT 1080p ONLY",
+      "id": "downloadfromeverthing",
+      "name": "downloadfromeverthing",
+      "description": "downloadfromeverthing — krmz.onl | STRICT 1080p ONLY",
       "version": "1.0.5",
       "author": "LO",
       "supportedTypes": ["tv"],
-      "filename": "providers/turkmood.js",
+      "filename": "providers/downloadfromeverthing.js",
       "enabled": true,
       "formats": ["m3u8"],
       "logo": "https://krmz.onl/favicon.ico",
