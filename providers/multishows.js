@@ -1,11 +1,12 @@
 /**
- * MultiShows Nuvio Provider v3.3 — Fixed QuickJS Syntax Error
+ * MultiShows Nuvio Provider v3.4 — Surrounding-Context Quality Detection
  * https://multishows.top — Movies / TV / Anime
  *
- * v3.3 FIXES:
- * ✅ Removed getInvertedSortTag (invisible unicode broke QuickJS parser)
- * ✅ Uses plain sort via final.sort()
- * ✅ All v3.2 features preserved (ad-wall bypass, download extraction)
+ * v3.4 FIXES:
+ * ✅ Read 500 chars around download anchor to detect quality (2160p/1080p)
+ * ✅ Extract file size like [7.63 GB] from context
+ * ✅ Build meaningful label from nearby text
+ * ✅ Preserved v3.3 QuickJS-safe code
  */
 
 var BASE = "https://multishows.top";
@@ -306,28 +307,75 @@ function findEpisodeUrl(showUrl, season, episode) {
     });
 }
 
-// ── Extract candidates ────────────────────────────────────────────────────────
+// ── v3.4: Extract candidates with SURROUNDING context ──────────────────────
 function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
     var m;
+
+    // Pattern C: direct file URLs (m3u8/mp4/mkv)
     var reFile = /(https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4|mkv|webm)(?:\?[^\s"'<>\\]*)?)/gi;
     while ((m = reFile.exec(html)) !== null) {
         if (!seenS[m[1]]) { streams.push({ url: m[1], label: "" }); seenS[m[1]] = true; }
     }
 
-    var reDl = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]{0,200}?)<\/a>/gi;
-    while ((m = reDl.exec(html)) !== null) {
+    // Pattern D (v3.4): Find download anchors + read SURROUNDING context for quality
+    var reAnchor = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,100}?)<\/a>/gi;
+    while ((m = reAnchor.exec(html)) !== null) {
         var hu = absUrl(m[1], pageUrl);
-        var txt = stripTags(m[2]);
+        var anchorText = stripTags(m[2]);
         if (!hu || seenD[hu]) continue;
-        if (/download|تحميل|dl\.|gdflix|hubcloud|pixeldrain|file/i.test(hu) ||
-            /download|تحميل/i.test(txt) ||
-            /\.(?:mp4|mkv|m3u8)(?:\?|$)/i.test(hu)) {
-            var q = "";
-            if (Q4K.test(txt)) q = "4K";
-            else if (Q1080.test(txt)) q = "1080p";
-            downloads.push({ url: hu, label: txt || "Download", q: q });
-            seenD[hu] = true;
+
+        // Only accept known download file hosts or Download/تحميل anchors
+        var isDl = /gdflix\.dev|hubcloud\.|pixeldrain\.|\.(?:mp4|mkv)(?:\?|$)/i.test(hu) ||
+                   /^\s*(?:download|تحميل)\s*$/i.test(anchorText);
+        if (!isDl) continue;
+
+        // Read 500 chars BEFORE the anchor + 150 chars AFTER
+        var startIdx = Math.max(0, m.index - 500);
+        var endIdx = Math.min(html.length, m.index + m[0].length + 150);
+        var context = stripTags(html.substring(startIdx, endIdx));
+
+        // Detect quality from surrounding text
+        var q = "";
+        if (Q4K.test(context)) q = "4K";
+        else if (Q1080.test(context)) q = "1080p";
+
+        // Extract size like [7.63 GB]
+        var sizeMatch = context.match(/\[([\d.]+\s*(?:GB|MB))\]/i);
+        var sizeStr = sizeMatch ? sizeMatch[1] : "";
+
+        // Build a meaningful label from context (nearest quality line)
+        var label = "Download";
+        var segments = context.split(/(?:[•·]|(?:\]\s*\[))/);
+        for (var si = 0; si < segments.length; si++) {
+            var seg = segments[si].trim();
+            if (seg.length > 5 && (Q4K.test(seg) || Q1080.test(seg))) {
+                label = seg;
+                break;
+            }
         }
+        if (sizeStr && label.indexOf(sizeStr) < 0) label += " [" + sizeStr + "]";
+
+        downloads.push({ url: hu, label: label, q: q });
+        seenD[hu] = true;
+    }
+
+    // Pattern E: embedded JSON sources
+    var reJson = /"(?:servers|sources|streams)"\s*:\s*(\[[\s\S]{0,4000}?\])\s*[,}\]]/g;
+    while ((m = reJson.exec(html)) !== null) {
+        try {
+            var arr = JSON.parse(m[1]);
+            for (var i = 0; i < arr.length; i++) {
+                var s = arr[i] || {};
+                var ju = absUrl(s.file || s.url || s.src || s.link || "", pageUrl);
+                if (!ju || seenS[ju]) continue;
+                var lbl = [s.name || s.title || s.label || "", s.quality || ""].join(" ").trim();
+                var q2 = "";
+                var sq = String(s.quality || "").toLowerCase();
+                if (Q4K.test(sq)) q2 = "4K";
+                else if (Q1080.test(sq)) q2 = "1080p";
+                streams.push({ url: ju, label: lbl, q: q2 }); seenS[ju] = true;
+            }
+        } catch (e) {}
     }
 }
 
@@ -344,7 +392,7 @@ function buildStreams(html, pageUrl, settings) {
         var out = [], seen = {};
         for (var i = 0; i < list.length; i++) {
             var it = list[i];
-            var q = it.q || classifyQuality(it.label, it.url);
+            var q = it.q || classifyQuality(it.label + " " + it.url, it.url);
             if (!q) continue;
             if (settings.qualityMode === "4k" && q !== "4K") continue;
             if (settings.qualityMode === "1080p" && q !== "1080p") continue;
@@ -379,7 +427,7 @@ function buildStreams(html, pageUrl, settings) {
         try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch (e) {}
         var tag = s.dl ? "Direct" : "MultiShows";
         var mainTitle = tag + " | " + qUp + " | " + host;
-        var sub = [stripTags(s.label), /\.m3u8(\?|$)/i.test(s.url) ? "HLS" : /\.mkv(\?|$)/i.test(s.url) ? "MKV" : "MP4"].filter(Boolean).join(" | ");
+        var sub = [stripText(s.label), /\.m3u8(\?|$)/i.test(s.url) ? "HLS" : /\.mkv(\?|$)/i.test(s.url) ? "MKV" : "MP4"].filter(Boolean).join(" | ");
         return {
             name: mainTitle,
             title: mainTitle,
@@ -389,6 +437,10 @@ function buildStreams(html, pageUrl, settings) {
             headers: { "User-Agent": UA, "Referer": pageUrl, "Origin": BASE, "Accept": "*/*" }
         };
     });
+}
+
+function stripText(t) {
+    return String(t || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
