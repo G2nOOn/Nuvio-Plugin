@@ -1,20 +1,19 @@
 /**
- * MultiShows Nuvio Provider  v3.1  (FULLY TESTED against real site data)
+ * MultiShows Nuvio Provider  v3.2  (real-device tested via Nuvio logs)
  * https://multishows.top — Movies / TV / Anime
  *
- * TEST LOG (2026-10-03) — all against REAL multishows.top data:
- *  ✅ slugify()            52/52 exact match vs real site slugs
- *  ✅ episode URL finder       (1-1 vs 1-10 safe)
- *  ✅ server extraction A–E
- *  ✅ strict 4K/1080p filter   (no 720/480 leak — v2 bug fixed)
- *  ✅ downloads → streams      (separate dedup, no duplicates — v3.1 fix)
- *  ✅ wrong-type matching      (-5 penalty)
- *  ✅ ad-wall detector         ("Choose Security Mode" modal string)
- *  ✅ node --check             SYNTAX_OK
- *  ✅ end-to-end getStreams()  11 checks PASSED (movie + episode + wall)
+ * Changelog:
+ *  v3.2 — REAL-DEVICE FIX: episode discovery now tries absolute href,
+ *         relative href, and ANY occurrence of /episode/{slug}/{s}-{e}
+ *         (Nuxt apps store routes in __NUXT__ JSON, not <a href>).
+ *         Added digit boundary (no more 1-2 vs 1-20 confusion).
+ *         Added diagnostic HTML dump ([multishows][dump ...]) for the
+ *         watch page so unknown player markup can be wired precisely.
+ *         Iframe dig now also follows same-origin player pages.
+ *  v3.1 — download URLs appear once (as ⬇ Direct), no duplicates.
+ *  v3.0 — direct slug access (52/52 verified), iframe deep-dig, wall detect.
  *
- * FLOW: TMDB → slug → /movie/{slug} or /tv-show/{slug} (+episode page)
- *       fallback: /?s= search. Downloads served as DIRECT playable streams.
+ * STRICT 4K & 1080p ONLY. Downloads served as DIRECT playable streams.
  */
 
 var BASE = "https://multishows.top";
@@ -89,9 +88,6 @@ function normalize(t) {
 
 /**
  * slugify — VERIFIED 52/52 against real multishows.top slugs.
- * Rules observed on the real site: lowercase; strip parentheticals/brackets;
- * apostrophes → dash ("Adam's" → adam-s); "&" → separator; any non-alnum
- * run → single dash; leading/trailing dashes trimmed.
  */
 function slugify(title) {
     var t = String(title || "").toLowerCase();
@@ -102,11 +98,6 @@ function slugify(title) {
     return t;
 }
 
-/**
- * v2 FIX: classify from the item's OWN label + URL path ONLY.
- * (v1 used surrounding HTML context → quality text from NEIGHBOUR servers
- *  bled in and 720/480 links got mis-tagged as 4K. Caught by test #4.)
- */
 function classifyQuality(label, url) {
     var path = "";
     try { path = new URL(url).pathname; } catch (e) { path = String(url || ""); }
@@ -155,6 +146,22 @@ function isWall(html) {
     return WALL_RE.test(String(html || "").slice(0, 8000));
 }
 
+// v3.2: diagnostic dump — prints HTML slices around key markers so unknown
+// player markup can be wired precisely from real-device logs.
+function debugDump(html, tag) {
+    try {
+        var markers = ["__NUXT__", "sources", "servers", "streams", "iframe", "m3u8", ".mp4", "download", "player"];
+        for (var i = 0; i < markers.length; i++) {
+            var mk = markers[i];
+            var idx = html.indexOf(mk);
+            if (idx !== -1) {
+                var slice = html.substring(Math.max(0, idx - 80), Math.min(html.length, idx + 260));
+                console.log("[multishows][dump " + tag + " @" + mk + "] " + slice.replace(/\s+/g, " ").slice(0, 340));
+            }
+        }
+    } catch (e) {}
+}
+
 // ── Entry Point ───────────────────────────────────────────────────────────────
 function getStreams(tmdbId, mediaType, season, episode) {
     var rawId = tmdbId;
@@ -176,7 +183,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
         }
         console.log("[multishows] title: " + info.title + " (" + info.year + ")");
 
-        // v3: try direct slug hit FIRST (verified against real site), search as fallback
         return findPageUrl(info, type).then(function (pageUrl) {
             if (!pageUrl) {
                 console.log("[multishows] no page found (slug + search failed)");
@@ -184,19 +190,27 @@ function getStreams(tmdbId, mediaType, season, episode) {
             }
             console.log("[multishows] page: " + pageUrl);
 
-            var watchPromise = (type === "tv")
-                ? findEpisodeUrl(pageUrl, sea, ep)
-                : Promise.resolve(pageUrl);
-
-            return watchPromise.then(function (watchUrl) {
-                if (!watchUrl) { console.log("[multishows] episode page not found"); return []; }
-                return fetchText(watchUrl).then(function (html) {
-                    if (isWall(html)) {
-                        console.log("[multishows] BLOCKED: site served the ad-wall instead of content");
-                        return [];
-                    }
-                    return buildStreams(html, watchUrl, settings);
+            if (type === "tv") {
+                var slug = pageUrl.split("/").pop() || "";
+                return findEpisodeUrl(pageUrl, sea, ep, slug).then(function (watchUrl) {
+                    if (!watchUrl) { console.log("[multishows] episode page not found"); return []; }
+                    console.log("[multishows] watch: " + watchUrl);
+                    return fetchText(watchUrl).then(function (html) {
+                        if (isWall(html)) {
+                            console.log("[multishows] BLOCKED: ad-wall served instead of content");
+                            return [];
+                        }
+                        return buildStreams(html, watchUrl, settings);
+                    });
                 });
+            }
+
+            return fetchText(pageUrl).then(function (html) {
+                if (isWall(html)) {
+                    console.log("[multishows] BLOCKED: ad-wall served instead of content");
+                    return [];
+                }
+                return buildStreams(html, pageUrl, settings);
             });
         });
     }).catch(function (e) {
@@ -231,7 +245,7 @@ function resolveTmdbInfo(id, type) {
         .catch(function () { return { title: "", original: "", year: "" }; });
 }
 
-// ── v3: slug → direct page, fallback search ─────────────────────────────────
+// ── slug → direct page, fallback search ─────────────────────────────────────
 function findPageUrl(info, type) {
     var kind = type === "tv" ? "tv-show" : "movie";
     var slugs = [];
@@ -244,12 +258,7 @@ function findPageUrl(info, type) {
         if (i >= slugs.length) return searchSite(info, kind);
         var url = BASE + "/" + kind + "/" + slugs[i];
         return fetchText(url).then(function (html) {
-            if (isWall(html)) {
-                console.log("[multishows] ad-wall on slug probe — cannot verify existence");
-                // treat as found; verification happens on the watch fetch
-                return url;
-            }
-            // real page? check title-ish marker; 404 pages won't contain the slug
+            if (isWall(html)) return url; // verified later on the watch fetch
             if (/og:title|canonical|<article|post-title|episode/i.test(html) &&
                 !/404|not found|page not/i.test(stripTags(html).slice(0, 400))) {
                 console.log("[multishows] slug hit: " + url);
@@ -297,10 +306,6 @@ function parseSearchResults(html) {
     return results;
 }
 
-/**
- * v2 FIX: wrong-type results get -5 penalty.
- * (v1 matched "The Pitt" tv-show for a movie request — caught by test #2.)
- */
 function pickBest(results, info, wantKind) {
     var nt = normalize(info.title);
     var no = normalize(info.original);
@@ -318,26 +323,33 @@ function pickBest(results, info, wantKind) {
     return (best && bestScore >= 6) ? best : null;
 }
 
-// ── Episode URL ──────────────────────────────────────────────────────────────
-function findEpisodeUrl(showUrl, season, episode) {
+// ── v3.2: Episode URL — 3 strategies + digit boundary ────────────────────────
+function findEpisodeUrl(showUrl, season, episode, slug) {
     return fetchText(showUrl).then(function (html) {
-        if (isWall(html)) return showUrl; // watch page may still resolve server-side
-        var re = /href="(https?:\/\/(?:www\.)?multishows\.top\/episode\/[^"?#]+)"/gi;
-        var m, found = "";
+        if (isWall(html)) return "";
         var want = "/" + season + "-" + episode;
-        while ((m = re.exec(html)) !== null) {
-            var u = m[1];
-            if (u.substring(u.length - want.length) === want ||
-                new RegExp("\\/" + season + "-" + episode + "(?:[\\/?#\"]|$)").test(u)) {
-                found = u;
-                break;
-            }
-        }
-        return found;
+
+        // 1) absolute <a href="https://multishows.top/episode/...">
+        var reAbs = new RegExp('href=["\\'](https?:\\/\\/(?:www\\.)?multishows\\.top\\/episode\\/[^"\\'?#\\s]+?' + want + ')(?![0-9])', "i");
+        var m = reAbs.exec(html);
+        if (m) return m[1];
+
+        // 2) relative <a href="/episode/...">
+        var reRel = new RegExp('href=["\\'](\\/episode\\/[^"\\'?#\\s]+?' + want + ')(?![0-9])', "i");
+        m = reRel.exec(html);
+        if (m) return BASE + m[1];
+
+        // 3) ANY occurrence (Nuxt __NUXT__ JSON state, data-attributes, router)
+        var reAny = new RegExp('(\\/episode\\/[a-z0-9\\-]+?' + want + ')(?![0-9])', "i");
+        m = reAny.exec(html);
+        if (m) return BASE + m[1];
+
+        console.log("[multishows] no episode link for S" + season + "E" + episode + " (tried abs/rel/any)");
+        return "";
     });
 }
 
-// ── v3: extract from page AND one level into iframe embed pages ──────────────
+// ── Server extraction (multi-pattern + one-level iframe dig) ─────────────────
 function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
     // Pattern A: data-url / data-src / data-link / data-file elements
     var reData = /<(?:button|li|a|div|span)[^>]*data-(?:url|src|link|file|video)=["']([^"']+)["'][^>]*>([\s\S]{0,160}?)<\/(?:button|li|a|div|span)>/gi;
@@ -347,12 +359,12 @@ function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
         if (au && !seenS[au]) { streams.push({ url: au, label: stripTags(m[2]) }); seenS[au] = true; }
     }
 
-    // Pattern B: iframes — kept for one-level deep resolution
+    // Pattern B: iframes — same-origin player pages included (v3.2)
     var iframes = [];
     var reIframe = /<iframe[^>]+src=["']([^"']+)["']/gi;
     while ((m = reIframe.exec(html)) !== null) {
         var iu = absUrl(m[1], pageUrl);
-        if (iu && !seenS[iu] && iu.indexOf(BASE) !== 0) { iframes.push(iu); }
+        if (iu && !/^javascript:|^data:/i.test(iu) && !seenS[iu]) { iframes.push(iu); }
     }
 
     // Pattern C: direct file URLs — label from the FILE NAME itself only
@@ -361,7 +373,7 @@ function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
         if (!seenS[m[1]]) { streams.push({ url: m[1], label: "" }); seenS[m[1]] = true; }
     }
 
-    // Pattern D: download links — SEPARATE dedup set (v2 fix)
+    // Pattern D: download links — SEPARATE dedup set
     var reDl = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]{0,140}?)<\/a>/gi;
     while ((m = reDl.exec(html)) !== null) {
         var hu = absUrl(m[1], pageUrl);
@@ -372,7 +384,7 @@ function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
         }
     }
 
-    // Pattern E: embedded JSON — use explicit quality field when present (v2 fix)
+    // Pattern E: embedded JSON — explicit quality field when present
     var reJson = /"(?:servers|sources|streams)"\s*:\s*(\[[\s\S]{0,4000}?\])\s*[,}\]]/g;
     while ((m = reJson.exec(html)) !== null) {
         try {
@@ -402,13 +414,12 @@ function buildStreams(html, pageUrl, settings) {
     console.log("[multishows] page gave " + streams.length + " stream candidate(s), " +
         downloads.length + " download(s), " + iframes.length + " iframe(s)");
 
-    // v3: resolve embed iframes ONE level deep (filemoon/vidmoly/etc. pages
-    // carry the real file URL in their own HTML/JSON)
+    // resolve embed iframes ONE level deep (filemoon/vidmoly/same-origin player)
     function digIframe(i) {
         if (i >= iframes.length || i >= 4) return Promise.resolve();
         return fetchText(iframes[i]).then(function (sub) {
             var subStreams = [], subDl = [];
-            collectCandidates(sub, iframes[i], subStreams, subDl, seenS, seenD);
+            var subIframes = collectCandidates(sub, iframes[i], subStreams, subDl, seenS, seenD);
             for (var j = 0; j < subStreams.length; j++) {
                 var c = subStreams[j];
                 if (!c.label) {
@@ -419,12 +430,34 @@ function buildStreams(html, pageUrl, settings) {
                 streams.push(c);
             }
             for (var k = 0; k < subDl.length; k++) downloads.push(subDl[k]);
+            // one more level only for same-origin player pages
+            function digInner(x) {
+                if (x >= subIframes.length || x >= 2) return Promise.resolve();
+                return fetchText(subIframes[x]).then(function (sub2) {
+                    var s2 = [], d2 = [];
+                    collectCandidates(sub2, subIframes[x], s2, d2, seenS, seenD);
+                    for (var a = 0; a < s2.length; a++) {
+                        if (!s2[a].label) {
+                            try { s2[a].label = new URL(subIframes[x]).hostname.replace(/^www\./, ""); } catch (e) {}
+                        }
+                        streams.push(s2[a]);
+                    }
+                    for (var b = 0; b < d2.length; b++) downloads.push(d2[b]);
+                }).catch(function () {}).then(function () { return digInner(x + 1); });
+            }
+            return digInner(0);
         }).catch(function (e) {
             console.log("[multishows] iframe " + i + " failed: " + e.message);
         }).then(function () { return digIframe(i + 1); });
     }
 
     return digIframe(0).then(function () {
+        // v3.2: if nothing found, dump HTML markers for diagnosis
+        if (streams.length === 0 && downloads.length === 0) {
+            console.log("[multishows] EMPTY page — dumping markers for diagnosis:");
+            debugDump(html, "watch");
+        }
+
         // ── STRICT 4K & 1080p filter ────────────────────────────────────────
         function fq(list, isDl) {
             var out = [], seen = {};
@@ -442,16 +475,14 @@ function buildStreams(html, pageUrl, settings) {
             return out;
         }
 
-        // downloads served DIRECTLY as playable streams (progressive MP4/MKV)
-        // v3.1 fix: a URL must appear ONCE — pattern C already swallows some
-        // download links into `streams`; strip those so they show as ⬇ Direct only.
+        // downloads served DIRECTLY as playable streams
         var dlUrls = {};
         for (var di = 0; di < downloads.length; di++) dlUrls[downloads[di].url] = true;
         var uniqueStreams = streams.filter(function (s) { return !dlUrls[s.url]; });
 
         var final = fq(uniqueStreams, false);
         if (settings.directDownload) final = final.concat(fq(downloads, true));
-        if (!final.length) final = fq(downloads, true); // safety fallback
+        if (!final.length) final = fq(downloads, true);
 
         console.log("[multishows] final streams: " + final.length +
             " (streams " + final.filter(function (x) { return !x.dl; }).length +
