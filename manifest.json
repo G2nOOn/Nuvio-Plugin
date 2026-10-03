@@ -42,13 +42,13 @@
       "contentLanguage": ["en"]
     },
     {
-      "id": "downloadfromeverthing",
-      "name": "downloadfromeverthing",
-      "description": "downloadfromeverthing — krmz.onl | STRICT 1080p ONLY",
+      "id": "multishows",
+      "name": "Multishows",
+      "description": "Multishows — krmz.onl | STRICT 1080p ONLY",
       "version": "1.0.6",
       "author": "LO",
       "supportedTypes": ["tv"],
-      "filename": "providers/downloadfromeverthing.js",
+      "filename": "providers/multishows.js",
       "enabled": true,
       "formats": ["m3u8"],
       "logo": "https://krmz.onl/favicon.ico",
