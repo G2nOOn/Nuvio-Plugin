@@ -1,16 +1,17 @@
 // downloadeverything Provider for Nuvio
 // Source: slave.downloadeverythingfromeverywhere.com (NDJSON search API)
-// Ported from PlayTorrioV3 DownloadEverythingScraper (downloadeverything.dart)
-// Hermes-safe: no async/await, no const/let, no arrow functions, no URL constructor
-// TMDB key: read from Nuvio-injected global only. No embedded fallback.
+// Hermes-safe: no async/await, no const/let, no arrow functions
 
-var TMDB_API_KEY = (typeof TMDB_API_KEY !== "undefined" && TMDB_API_KEY) || "";
+var TMDB_API_KEY =
+    (typeof globalThis !== "undefined" && globalThis.TMDB_API_KEY) ||
+    (typeof self !== "undefined" && self.TMDB_API_KEY) ||
+    "439c478a771f35c05022f9feabcca01c";
+
 var TMDB_DIRECT = "https://api.themoviedb.org/3";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
 var SLAVE_URL = "https://slave.downloadeverythingfromeverywhere.com/";
 var ORIGIN = "https://downloadeverythingfromeverywhere.com";
 
-// Domains that are known unstreamable / blocked — skipped exactly like the Dart scraper
 var SKIP_DOMAINS = [
     "111477.xyz",
     "vadapav.mov",
@@ -58,7 +59,7 @@ function formEncode(obj) {
     return parts.join("&");
 }
 
-// ── TMDB Metadata Resolution (same pattern as a111477) ─────────────────────
+// ── TMDB Metadata Resolution ────────────────────────────────────────────────
 
 function resolveMeta(tmdbId, mediaType) {
     var kind = mediaType === "tv" ? "tv" : "movie";
@@ -66,7 +67,7 @@ function resolveMeta(tmdbId, mediaType) {
     if (_metaCache[ck]) return Promise.resolve(_metaCache[ck]);
 
     if (!TMDB_API_KEY) {
-        console.log("[downloadeverything] TMDB_API_KEY not provided by Nuvio");
+        console.log("[DE] TMDB_API_KEY missing");
         return Promise.resolve(null);
     }
 
@@ -88,16 +89,16 @@ function resolveMeta(tmdbId, mediaType) {
         var imdbId = (j.external_ids && j.external_ids.imdb_id) || j.imdb_id || null;
         var meta = { title: title, year: year, imdbId: imdbId };
         _metaCache[ck] = meta;
-        console.log("[downloadeverything] TMDB resolved: title=" + title + " imdb=" + imdbId);
+        console.log("[DE] TMDB title=" + title + " imdb=" + imdbId);
         return meta;
     })
     .catch(function(e) {
-        console.log("[downloadeverything] TMDB error: " + e.message);
+        console.log("[DE] TMDB error: " + e.message);
         return null;
     });
 }
 
-// ── HubCloud resolver: Cloudflare R2 / S3 signed stream ────────────────────
+// ── HubCloud resolver ───────────────────────────────────────────────────────
 
 function resolveHubCloud(hubUrl) {
     return fetchWithTimeout(hubUrl, { headers: { "User-Agent": UA, "Referer": ORIGIN + "/" } }, 8000)
@@ -119,7 +120,7 @@ function resolveHubCloud(hubUrl) {
     .catch(function() { return null; });
 }
 
-// ── ClicknUpload resolver: automated form submit ───────────────────────────
+// ── ClicknUpload resolver ──────────────────────────────────────────────────
 
 function parsePostFormInputs(html) {
     var formMatch = /<form[^>]+method=["']POST["'][^>]*>([\s\S]*?)<\/form>/i.exec(html);
@@ -162,7 +163,6 @@ function resolveClicknUpload(url) {
             if (!p2) return null;
             p2["down_script"] = "1";
 
-            // Wait like the Dart scraper (free-download countdown)
             return delay(4500)
             .then(function() {
                 return fetchWithTimeout(url, { method: "POST", headers: h, body: formEncode(p2) }, 8000);
@@ -185,7 +185,7 @@ function resolveClicknUpload(url) {
     .catch(function() { return null; });
 }
 
-// ── Direct MP4/MKV verification ────────────────────────────────────────────
+// ── Direct MP4/MKV verification ─────────────────────────────────────────────
 
 function verifyDirect(url) {
     return fetchWithTimeout(url, { method: "HEAD", headers: { "User-Agent": UA } }, 6000)
@@ -196,7 +196,7 @@ function verifyDirect(url) {
     .catch(function() { return null; });
 }
 
-// ── Item resolver (ported 1:1 from _resolveItem in the Dart scraper) ───────
+// ── Item resolver ───────────────────────────────────────────────────────────
 
 function resolveItem(item, fallbackTitle) {
     var rawUrl = item.url ? String(item.url) : "";
@@ -211,12 +211,10 @@ function resolveItem(item, fallbackTitle) {
     var directPromise = null;
 
     if (rawUrl.indexOf("hakunaymatata.com") !== -1) {
-        // Moviebox / HakunaMatata direct stream
         directPromise = Promise.resolve(rawUrl);
         provider = "Moviebox";
         streamHeaders = { "User-Agent": "Lavf/60.16.100" };
     } else if (rawUrl.indexOf("pixeldrain.dev") !== -1 || rawUrl.indexOf("pixeldrain.com") !== -1) {
-        // Pixeldrain Direct API
         var pm = /pixeldrain\.(?:dev|com)\/(?:u|l)\/([a-zA-Z0-9_-]+)/.exec(rawUrl);
         if (pm) {
             directPromise = Promise.resolve("https://pixeldrain.com/api/file/" + pm[1]);
@@ -224,7 +222,6 @@ function resolveItem(item, fallbackTitle) {
             streamHeaders = { "User-Agent": UA };
         }
     } else if (rawUrl.indexOf("hubcloud.") !== -1 || rawUrl.indexOf("vcloud.zip") !== -1) {
-        // HubCloud inside resolver (Cloudflare R2 direct S3 signed stream)
         directPromise = resolveHubCloud(rawUrl).then(function(u) {
             if (u) {
                 provider = "HubCloud";
@@ -233,7 +230,6 @@ function resolveItem(item, fallbackTitle) {
             return u;
         });
     } else if (rawUrl.indexOf("clicknupload.") !== -1) {
-        // ClicknUpload inside form resolver
         directPromise = resolveClicknUpload(rawUrl).then(function(u) {
             if (u) {
                 provider = "ClicknUpload";
@@ -245,7 +241,6 @@ function resolveItem(item, fallbackTitle) {
                rawUrl.indexOf("111477.xyz") === -1 &&
                rawUrl.indexOf("vadapav.mov") === -1 &&
                rawUrl.indexOf(".cyou/res/") === -1) {
-        // Direct MP4 / MKV stream — quick liveness check first
         directPromise = verifyDirect(rawUrl).then(function(u) {
             if (u) {
                 provider = item.site ? String(item.site) : "DirectStream";
@@ -294,17 +289,19 @@ function resolveItem(item, fallbackTitle) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function getStreams(tmdbId, mediaType, season, episode) {
+    console.log("[DE] ==== ENTERED ==== tmdb=" + tmdbId + " type=" + mediaType + " key=" + (TMDB_API_KEY ? "YES" : "NO"));
+
     var isTv = mediaType === "tv";
     var sea = parseInt(season, 10) || 1;
     var ep = parseInt(episode, 10) || 1;
 
-    console.log("[downloadeverything] START " + (isTv ? "tv" : "movie") +
+    console.log("[DE] START " + (isTv ? "tv" : "movie") +
                 " tmdb=" + tmdbId + (isTv ? " S" + sea + "E" + ep : ""));
 
     return resolveMeta(tmdbId, mediaType)
     .then(function(meta) {
         if (!meta || !meta.title) {
-            console.log("[downloadeverything] no meta — slave API needs a title, aborting");
+            console.log("[DE] no meta — aborting");
             return [];
         }
 
@@ -317,7 +314,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
         if (meta.imdbId) payload.imdb_id = meta.imdbId;
         if (isTv) { payload.season = sea; payload.episode = ep; }
 
-        console.log("[downloadeverything] payload=" + JSON.stringify(payload));
+        console.log("[DE] payload=" + JSON.stringify(payload));
 
         return fetchWithTimeout(SLAVE_URL, {
             method: "POST",
@@ -331,12 +328,13 @@ function getStreams(tmdbId, mediaType, season, episode) {
             body: JSON.stringify(payload)
         }, 30000)
         .then(function(r) {
-            console.log("[downloadeverything] slave status=" + r.status);
+            console.log("[DE] slave status=" + r.status);
             if (r.status && r.status >= 400) return "";
             return r.text();
         })
         .then(function(text) {
-            // NDJSON response: one JSON object per line, hit lines carry the links
+            console.log("[DE] slave response chars=" + text.length);
+
             var items = [];
             var lines = String(text || "").split("\n");
             for (var i = 0; i < lines.length; i++) {
@@ -347,7 +345,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
                 if (!parsed || parsed.t !== "hit" || !parsed.links || !parsed.links.length) continue;
 
                 var site = parsed.site ? String(parsed.site) : "DownloadEverything";
-                console.log("[downloadeverything] hit from " + site + ": " + parsed.links.length + " candidate(s)");
+                console.log("[DE] hit from " + site + ": " + parsed.links.length + " candidate(s)");
 
                 for (var j = 0; j < parsed.links.length; j++) {
                     var l = parsed.links[j];
@@ -360,7 +358,11 @@ function getStreams(tmdbId, mediaType, season, episode) {
                 }
             }
 
-            console.log("[downloadeverything] total candidates: " + items.length);
+            console.log("[DE] total candidates: " + items.length);
+
+            if (items.length === 0) {
+                return [];
+            }
 
             var jobs = [];
             for (var n = 0; n < items.length; n++) {
@@ -383,13 +385,13 @@ function getStreams(tmdbId, mediaType, season, episode) {
                     return (rank[b.quality] || 0) - (rank[a.quality] || 0);
                 });
 
-                console.log("[downloadeverything] playable streams: " + out.length);
+                console.log("[DE] playable streams: " + out.length);
                 return out;
             });
         });
     })
     .catch(function(e) {
-        console.log("[downloadeverything] FATAL: " + (e && e.message ? e.message : e));
+        console.log("[DE] FATAL: " + (e && e.message ? e.message : e));
         return [];
     });
 }
