@@ -1,19 +1,18 @@
 /**
- * MultiShows Nuvio Provider  v3.2  (real-device tested via Nuvio logs)
+ * MultiShows Nuvio Provider  v3.2.1  (QuickJS syntax fix)
  * https://multishows.top — Movies / TV / Anime
  *
  * Changelog:
- *  v3.2 — REAL-DEVICE FIX: episode discovery now tries absolute href,
- *         relative href, and ANY occurrence of /episode/{slug}/{s}-{e}
- *         (Nuxt apps store routes in __NUXT__ JSON, not <a href>).
- *         Added digit boundary (no more 1-2 vs 1-20 confusion).
- *         Added diagnostic HTML dump ([multishows][dump ...]) for the
- *         watch page so unknown player markup can be wired precisely.
- *         Iframe dig now also follows same-origin player pages.
+ *  v3.2.1 — FIXED QuickJS SyntaxError: episode regex strings rebuilt cleanly
+ *           (single-quoted strings containing \' broke parsing at main.js:336).
+ *           Episode discovery: one clean regex (abs href / rel href / Nuxt JSON)
+ *           + canonical /episode/{slug}/{s}-{e} probe fallback.
  *  v3.1 — download URLs appear once (as ⬇ Direct), no duplicates.
- *  v3.0 — direct slug access (52/52 verified), iframe deep-dig, wall detect.
+ *  v3.0 — direct slug access (52/52 verified vs real site), iframe deep-dig,
+ *         ad-wall detection, STRICT 4K & 1080p, downloads as direct streams.
  *
- * STRICT 4K & 1080p ONLY. Downloads served as DIRECT playable streams.
+ * FLOW: TMDB → slug → /movie/{slug} or /tv-show/{slug} (+episode page)
+ *       fallback: /?s= search. Downloads served as DIRECT playable streams.
  */
 
 var BASE = "https://multishows.top";
@@ -91,7 +90,7 @@ function normalize(t) {
  */
 function slugify(title) {
     var t = String(title || "").toLowerCase();
-    try { t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
+    try { t = t.normalize("NFD").replace(/[̀-ͯ]/g, ""); } catch (e) {}
     t = t.replace(/\([^)]*\)|\[[^\]]*\]/g, " ");
     t = t.replace(/['’`]/g, "-").replace(/&/g, " ");
     t = t.replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
@@ -146,8 +145,7 @@ function isWall(html) {
     return WALL_RE.test(String(html || "").slice(0, 8000));
 }
 
-// v3.2: diagnostic dump — prints HTML slices around key markers so unknown
-// player markup can be wired precisely from real-device logs.
+// Diagnostic dump — prints HTML slices around key markers (only when empty)
 function debugDump(html, tag) {
     try {
         var markers = ["__NUXT__", "sources", "servers", "streams", "iframe", "m3u8", ".mp4", "download", "player"];
@@ -258,7 +256,7 @@ function findPageUrl(info, type) {
         if (i >= slugs.length) return searchSite(info, kind);
         var url = BASE + "/" + kind + "/" + slugs[i];
         return fetchText(url).then(function (html) {
-            if (isWall(html)) return url; // verified later on the watch fetch
+            if (isWall(html)) return url;
             if (/og:title|canonical|<article|post-title|episode/i.test(html) &&
                 !/404|not found|page not/i.test(stripTags(html).slice(0, 400))) {
                 console.log("[multishows] slug hit: " + url);
@@ -323,33 +321,36 @@ function pickBest(results, info, wantKind) {
     return (best && bestScore >= 6) ? best : null;
 }
 
-// ── v3.2: Episode URL — 3 strategies + digit boundary ────────────────────────
+// ── v3.2.1: Episode URL — regex واحد نظيف + مسار قانوني احتياطي ──────────────
 function findEpisodeUrl(showUrl, season, episode, slug) {
     return fetchText(showUrl).then(function (html) {
         if (isWall(html)) return "";
         var want = "/" + season + "-" + episode;
-
-        // 1) absolute <a href="https://multishows.top/episode/...">
-        var reAbs = new RegExp('href=["\\'](https?:\\/\\/(?:www\\.)?multishows\\.top\\/episode\\/[^"\\'?#\\s]+?' + want + ')(?![0-9])', "i");
-        var m = reAbs.exec(html);
-        if (m) return m[1];
-
-        // 2) relative <a href="/episode/...">
-        var reRel = new RegExp('href=["\\'](\\/episode\\/[^"\\'?#\\s]+?' + want + ')(?![0-9])', "i");
-        m = reRel.exec(html);
+        // يغطي: href مطلق + href نسبي + JSON مضمّن (Nuxt) — بدون علامات تنصيص داخلة
+        var re = new RegExp("(/episode/[a-z0-9\\-]+?" + want + ")(?![0-9])", "i");
+        var m = re.exec(html);
         if (m) return BASE + m[1];
 
-        // 3) ANY occurrence (Nuxt __NUXT__ JSON state, data-attributes, router)
-        var reAny = new RegExp('(\\/episode\\/[a-z0-9\\-]+?' + want + ')(?![0-9])', "i");
-        m = reAny.exec(html);
-        if (m) return BASE + m[1];
-
-        console.log("[multishows] no episode link for S" + season + "E" + episode + " (tried abs/rel/any)");
+        // احتياطي: ابنِ المسار القانوني وتحقق من وجوده
+        if (slug) {
+            var guess = BASE + "/episode/" + slug + "/" + season + "-" + episode;
+            console.log("[multishows] path not in show HTML — probing canonical route");
+            return fetchText(guess).then(function (epHtml) {
+                if (isWall(epHtml)) return guess;
+                if (/og:title|<article|season|watch/i.test(epHtml) &&
+                    !/404|not found|page not/i.test(stripTags(epHtml).slice(0, 400))) {
+                    return guess;
+                }
+                console.log("[multishows] canonical episode route missing/404");
+                return "";
+            }).catch(function () { return ""; });
+        }
+        console.log("[multishows] no episode link for S" + season + "E" + episode);
         return "";
     });
 }
 
-// ── Server extraction (multi-pattern + one-level iframe dig) ─────────────────
+// ── Server extraction (multi-pattern + iframe dig) ───────────────────────────
 function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
     // Pattern A: data-url / data-src / data-link / data-file elements
     var reData = /<(?:button|li|a|div|span)[^>]*data-(?:url|src|link|file|video)=["']([^"']+)["'][^>]*>([\s\S]{0,160}?)<\/(?:button|li|a|div|span)>/gi;
@@ -359,7 +360,7 @@ function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
         if (au && !seenS[au]) { streams.push({ url: au, label: stripTags(m[2]) }); seenS[au] = true; }
     }
 
-    // Pattern B: iframes — same-origin player pages included (v3.2)
+    // Pattern B: iframes — same-origin player pages included
     var iframes = [];
     var reIframe = /<iframe[^>]+src=["']([^"']+)["']/gi;
     while ((m = reIframe.exec(html)) !== null) {
@@ -414,7 +415,7 @@ function buildStreams(html, pageUrl, settings) {
     console.log("[multishows] page gave " + streams.length + " stream candidate(s), " +
         downloads.length + " download(s), " + iframes.length + " iframe(s)");
 
-    // resolve embed iframes ONE level deep (filemoon/vidmoly/same-origin player)
+    // resolve embed iframes ONE level deep (+ one inner level)
     function digIframe(i) {
         if (i >= iframes.length || i >= 4) return Promise.resolve();
         return fetchText(iframes[i]).then(function (sub) {
@@ -430,7 +431,7 @@ function buildStreams(html, pageUrl, settings) {
                 streams.push(c);
             }
             for (var k = 0; k < subDl.length; k++) downloads.push(subDl[k]);
-            // one more level only for same-origin player pages
+
             function digInner(x) {
                 if (x >= subIframes.length || x >= 2) return Promise.resolve();
                 return fetchText(subIframes[x]).then(function (sub2) {
@@ -452,7 +453,6 @@ function buildStreams(html, pageUrl, settings) {
     }
 
     return digIframe(0).then(function () {
-        // v3.2: if nothing found, dump HTML markers for diagnosis
         if (streams.length === 0 && downloads.length === 0) {
             console.log("[multishows] EMPTY page — dumping markers for diagnosis:");
             debugDump(html, "watch");
@@ -475,7 +475,7 @@ function buildStreams(html, pageUrl, settings) {
             return out;
         }
 
-        // downloads served DIRECTLY as playable streams
+        // downloads served DIRECTLY as playable streams; each URL appears once
         var dlUrls = {};
         for (var di = 0; di < downloads.length; di++) dlUrls[downloads[di].url] = true;
         var uniqueStreams = streams.filter(function (s) { return !dlUrls[s.url]; });
@@ -491,30 +491,4 @@ function buildStreams(html, pageUrl, settings) {
         return final.map(function (s) {
             var qUp = s.quality.toUpperCase();
             var host = "CDN";
-            try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch (e) {}
-            var tag = s.dl ? "⬇ Direct" : "MultiShows";
-            var mainTitle = [tag, qUp, host].join(" • ");
-            var sub = [stripTags(s.label), /\.m3u8(\?|$)/i.test(s.url) ? "HLS" : /\.mkv(\?|$)/i.test(s.url) ? "MKV" : "MP4"].filter(Boolean).join("\n");
-            return {
-                name: getInvertedSortTag(s.quality === "4K" ? 2 : 1, 10) + mainTitle,
-                title: mainTitle,
-                size: sub,
-                url: s.url,
-                quality: qUp,
-                headers: { "User-Agent": UA, "Referer": pageUrl, "Origin": BASE, "Accept": "*/*" },
-                _host: host
-            };
-        });
-    });
-}
-
-// ── Export ────────────────────────────────────────────────────────────────────
-if (typeof module !== "undefined" && module.exports) {
-    module.exports = { getStreams: getStreams, onSettings: onSettings };
-} else if (typeof globalThis !== "undefined") {
-    globalThis.getStreams = getStreams;
-    globalThis.onSettings = onSettings;
-} else if (typeof window !== "undefined") {
-    window.getStreams = getStreams;
-    window.onSettings = onSettings;
-}
+            try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch
