@@ -1,705 +1,280 @@
-// UHD Movies Scraper for Nuvio Local Scrapers
-// React Native compatible version with Cheerio support
-// UPDATED: Supports HubCloud direct links (uhdmovies.my new format)
-
+// UHD Movies Scraper
 const cheerio = require('cheerio-without-node-native');
-console.log('[UHDMovies] Using cheerio-without-node-native for DOM parsing');
 
-// Constants
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
-const FALLBACK_DOMAIN = 'https://uhdmovies.my';
-const FALLBACK_DOMAINS = [
-  'https://uhdmovies.my',
-  'https://uhdmovies.pink',
-  'https://uhdmovies.email'
-];
-const DOMAIN_CACHE_TTL = 4 * 60 * 60 * 1000;
+const BASE_DOMAIN = 'https://uhdmovies.my';
 
-// Link patterns
-const SID_PATTERNS = [
-  'tech.unblockedgames.world',
-  'tech.examzculture.in',
-  'tech.examdegree.site',
-  'tech.creativeexpressionsblog.com'
-];
-const HUB_CLOUD_PATTERNS = [
-  'hubcloud.ist',
-  'hubcloud.cx',
-  'hubcloud.foo',
-  'hubcloud.lol'
-];
+const SID_HOSTS = ['tech.unblockedgames.world', 'tech.examzculture.in', 'tech.examdegree.site'];
+const HUB_HOSTS = ['hubcloud.ist', 'hubcloud.cx', 'hubcloud.foo', 'hubcloud.lol'];
 
-let uhdMoviesDomain = FALLBACK_DOMAIN;
-let domainCacheTimestamp = 0;
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-async function getUHDMoviesDomain() {
-  const now = Date.now();
-  if (now - domainCacheTimestamp < DOMAIN_CACHE_TTL) {
-    return uhdMoviesDomain;
+function hasPattern(url, patterns) {
+  if (!url) return false;
+  for (var i = 0; i < patterns.length; i++) {
+    if (url.indexOf(patterns[i]) >= 0) return true;
   }
-
-  try {
-    console.log('[UHDMovies] Fetching latest domain from GitHub...');
-    const response = await fetch('https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json', {
-      method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.UHDMovies) {
-        uhdMoviesDomain = data.UHDMovies;
-        domainCacheTimestamp = now;
-        console.log('[UHDMovies] Updated domain from GitHub: ' + uhdMoviesDomain);
-        return uhdMoviesDomain;
-      }
-    }
-  } catch (error) {
-    console.error('[UHDMovies] GitHub fetch failed: ' + error.message);
-  }
-
-  for (const domain of FALLBACK_DOMAINS) {
-    try {
-      console.log('[UHDMovies] Testing fallback domain: ' + domain);
-      const test = await fetch(domain + '/', {
-        method: 'GET',
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-      });
-      if (test.ok) {
-        uhdMoviesDomain = domain;
-        domainCacheTimestamp = now;
-        console.log('[UHDMovies] Using working domain: ' + domain);
-        return domain;
-      }
-    } catch (e) {
-      console.log('[UHDMovies] Domain failed: ' + domain);
-    }
-  }
-
-  return FALLBACK_DOMAIN;
+  return false;
 }
 
-async function makeRequest(url, options = {}) {
-  const defaultHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Accept-Encoding': 'gzip, deflate',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
+function makeRequest(url, options) {
+  options = options || {};
+  var headers = {
+    'User-Agent': UA,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5'
   };
-
-  const response = await fetch(url, {
-    ...options,
-    headers: { ...defaultHeaders, ...options.headers }
-  });
-
-  if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-  return response;
+  if (options.headers) {
+    for (var k in options.headers) headers[k] = options.headers[k];
+  }
+  return fetch(url, { method: options.method || 'GET', headers: headers, body: options.body });
 }
 
-function isSidLink(url) {
-  return SID_PATTERNS.some(function(p) { return url && url.indexOf(p) >= 0; });
+function cleanQuality(raw) {
+  if (!raw) return 'Unknown';
+  var text = String(raw).toLowerCase();
+  var parts = [];
+  if (text.indexOf('2160') >= 0 || text.indexOf('4k') >= 0) parts.push('4K');
+  else if (text.indexOf('1080') >= 0) parts.push('1080p');
+  else if (text.indexOf('720') >= 0) parts.push('720p');
+  else if (text.indexOf('480') >= 0) parts.push('480p');
+  if (text.indexOf('hdr') >= 0) parts.push('HDR');
+  if (text.indexOf('dolby vision') >= 0 || text.indexOf('dovi') >= 0) parts.push('DV');
+  if (text.indexOf('hevc') >= 0 || text.indexOf('x265') >= 0) parts.push('HEVC');
+  if (text.indexOf('web-dl') >= 0) parts.push('WEB-DL');
+  if (parts.length === 0) parts.push('Unknown');
+  return parts.join(' | ');
 }
 
-function isHubCloudLink(url) {
-  return HUB_CLOUD_PATTERNS.some(function(p) { return url && url.indexOf(p) >= 0; });
+function parseSize(text) {
+  if (!text) return 0;
+  var m = String(text).match(/([0-9.]+)\s*(GB|MB|TB)/i);
+  if (!m) return 0;
+  var v = parseFloat(m[1]);
+  var u = m[2].toUpperCase();
+  if (u === 'TB') return v * 1024 * 1024 * 1024 * 1024;
+  if (u === 'GB') return v * 1024 * 1024 * 1024;
+  if (u === 'MB') return v * 1024 * 1024;
+  return v;
 }
 
 async function searchMovies(query) {
   try {
-    const domain = await getUHDMoviesDomain();
-    const searchUrl = domain + '/search/' + encodeURIComponent(query);
-    console.log('[UHDMovies] Searching: ' + searchUrl);
+    var url = BASE_DOMAIN + '/search/' + encodeURIComponent(query);
+    console.log('[UHDMovies] Search: ' + url);
+    var resp = await makeRequest(url);
+    var html = await resp.text();
+    console.log('[UHDMovies] Search HTML length: ' + html.length);
 
-    const response = await makeRequest(searchUrl);
-    const html = await response.text();
-    console.log('[UHDMovies] Search response: ' + response.status + ', HTML: ' + html.length);
+    var $ = cheerio.load(html);
+    var results = [];
 
-    const results = [];
-    const $ = cheerio.load(html);
-
-    $('article.gridlove-post').each(function(index, element) {
-      const linkElement = $(element).find('a[href*="/download-"]');
-      if (linkElement.length > 0) {
-        const link = linkElement.first().attr('href');
-        const title = linkElement.first().attr('title') || $(element).find('h1.sanket').text().trim();
-        if (link && title && !results.some(function(item) { return item.url === link; })) {
-          const yearMatch = title.match(/\((\d{4})\)/);
-          const year = yearMatch ? parseInt(yearMatch[1]) : null;
-          results.push({
-            title: title.replace(/\(\d{4}\)/, '').trim(),
-            year: year,
-            url: link.indexOf('http') === 0 ? link : domain + link
-          });
-        }
-      }
+    $('article.gridlove-post').each(function(i, el) {
+      var $el = $(el);
+      var $a = $el.find('a[href*="/download-"]').first();
+      var href = $a.attr('href');
+      var title = $a.attr('title') || $el.find('h1').text().trim();
+      if (!href || !title) return;
+      var full = href.indexOf('http') === 0 ? href : BASE_DOMAIN + href;
+      results.push({ title: title, url: full });
     });
 
     if (results.length === 0) {
-      console.log('[UHDMovies] Grid search failed, trying list-based...');
-      $('a[href*="/download-"]').each(function(index, element) {
-        const link = $(element).attr('href');
-        if (link && !results.some(function(item) { return item.url === link; })) {
-          const title = $(element).text().trim();
-          if (title) {
-            const yearMatch = title.match(/\((\d{4})\)/);
-            const year = yearMatch ? parseInt(yearMatch[1]) : null;
-            results.push({
-              title: title.replace(/\(\d{4}\)/, '').trim(),
-              year: year,
-              url: link.indexOf('http') === 0 ? link : domain + link
-            });
-          }
-        }
+      $('a[href*="/download-"]').each(function(i, el) {
+        var href = $(el).attr('href');
+        var title = $(el).text().trim();
+        if (!href || !title) return;
+        var full = href.indexOf('http') === 0 ? href : BASE_DOMAIN + href;
+        results.push({ title: title, url: full });
       });
     }
 
-    console.log('[UHDMovies] Found ' + results.length + ' search results');
+    console.log('[UHDMovies] Found ' + results.length + ' results');
     return results;
-  } catch (error) {
-    console.error('[UHDMovies] Search failed: ' + error.message);
+  } catch (e) {
+    console.log('[UHDMovies] Search error: ' + e.message);
     return [];
   }
 }
 
-function extractCleanQuality(fullQualityText) {
-  if (!fullQualityText || fullQualityText === 'Unknown Quality') return 'Unknown Quality';
-
-  const cleaned = fullQualityText.replace(/(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g, '').trim();
-  const text = cleaned.toLowerCase();
-  let quality = [];
-
-  if (text.indexOf('2160p') >= 0 || text.indexOf('4k') >= 0) quality.push('4K');
-  else if (text.indexOf('1080p') >= 0) quality.push('1080p');
-  else if (text.indexOf('720p') >= 0) quality.push('720p');
-  else if (text.indexOf('480p') >= 0) quality.push('480p');
-
-  if (text.indexOf('hdr') >= 0) quality.push('HDR');
-  if (text.indexOf('dolby vision') >= 0 || text.indexOf('dovi') >= 0 || /\bdv\b/.test(text)) quality.push('DV');
-  if (text.indexOf('imax') >= 0) quality.push('IMAX');
-  if (text.indexOf('bluray') >= 0 || text.indexOf('blu-ray') >= 0) quality.push('BluRay');
-
-  if (quality.length > 0) return quality.join(' | ');
-
-  const patterns = [
-    /(\d{3,4}p.*?(?:x264|x265|hevc).*?)[\[\(]/i,
-    /(\d{3,4}p.*?)[\[\(]/i,
-    /((?:720p|1080p|2160p|4k).*?)$/i
-  ];
-
-  for (let i = 0; i < patterns.length; i++) {
-    const match = cleaned.match(patterns[i]);
-    if (match && match[1].trim().length < 100) {
-      return match[1].trim().replace(/x265/ig, 'HEVC');
-    }
-  }
-
-  if (cleaned.length > 80) {
-    return cleaned.substring(0, 77).replace(/x265/ig, 'HEVC') + '...';
-  }
-
-  return cleaned.replace(/x265/ig, 'HEVC');
-}
-
-function compareMedia(mediaInfo, searchResult) {
-  const titleMatch = mediaInfo.title.toLowerCase().indexOf(searchResult.title.toLowerCase()) >= 0 ||
-    searchResult.title.toLowerCase().indexOf(mediaInfo.title.toLowerCase()) >= 0;
-  const yearMatch = !mediaInfo.year || !searchResult.year ||
-    Math.abs(mediaInfo.year - searchResult.year) <= 1;
-  return titleMatch && yearMatch;
-}
-
-function parseSize(sizeString) {
-  if (!sizeString || typeof sizeString !== 'string') return 0;
-  const match = sizeString.match(/(\d+(?:\.\d+)?)\s*(GB|MB|TB)/i);
-  if (!match) return 0;
-  const value = parseFloat(match[1]);
-  const unit = match[2].toUpperCase();
-  if (unit === 'TB') return value * 1024 * 1024 * 1024 * 1024;
-  if (unit === 'GB') return value * 1024 * 1024 * 1024;
-  if (unit === 'MB') return value * 1024 * 1024;
-  return value;
-}
-
-async function resolveHubCloudLink(hubcloudUrl) {
-  console.log('[UHDMovies] Resolving HubCloud: ' + hubcloudUrl);
-
+async function extractTvLinks(pageUrl, season, episode) {
   try {
-    const response = await makeRequest(hubcloudUrl, {
-      headers: { 'Referer': 'https://uhdmovies.my/' }
-    });
-    const html = await response.text();
-    console.log('[UHDMovies] HubCloud page: ' + html.length + ' chars');
-    console.log('[UHDMovies] HTML sample: ' + html.substring(0, 800).replace(/\s+/g, ' '));
+    console.log('[UHDMovies] Extract TV: ' + pageUrl);
+    var resp = await makeRequest(pageUrl);
+    var html = await resp.text();
+    console.log('[UHDMovies] Page HTML: ' + html.length);
 
-    const $ = cheerio.load(html);
-    const hubOrigin = new URL(hubcloudUrl).origin;
-    const buttonUrls = [];
+    var $ = cheerio.load(html);
+    var links = [];
+    var currentQuality = '';
+    var inSeason = false;
+    var sLabel = 'SEASON ' + season;
+    var epPattern = 'Episode ' + episode;
 
-    $('a').each(function(i, el) {
-      const text = $(el).text().trim();
-      const href = $(el).attr('href');
-      if (!href) return;
+    $('.entry-content').find('*').each(function(i, el) {
+      var $el = $(el);
+      var txt = $el.text().trim();
 
-      const lowerText = text.toLowerCase();
-      if (/r2|10gbps|pixel|drive|download|instant|direct/i.test(lowerText) &&
-          !/donate|support|telegram/i.test(lowerText)) {
-        const absUrl = href.indexOf('http') === 0 ? href : hubOrigin + (href.indexOf('/') === 0 ? '' : '/') + href;
-        if (buttonUrls.indexOf(absUrl) < 0) buttonUrls.push(absUrl);
-        console.log('[UHDMovies] Button candidate: ' + text + ' -> ' + absUrl.substring(0, 100));
-      }
-    });
-
-    $('a[href]').each(function(i, el) {
-      const href = $(el).attr('href');
-      if (!href) return;
-      if (/r2\.cloudflarestorage|workers\.dev|pixeldrain|gpdl\.|hubcloud\.ist\/dl/i.test(href)) {
-        if (buttonUrls.indexOf(href) < 0) buttonUrls.push(href);
-        console.log('[UHDMovies] Direct URL candidate: ' + href.substring(0, 100));
-      }
-    });
-
-    const jsRegex = /["'](https?:\/\/[^"'\s]*?(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain\.dev\/api\/file|gpdl\.[^"'\s]*?))[^"'\s]*/gi;
-    let m;
-    while ((m = jsRegex.exec(html)) !== null) {
-      if (buttonUrls.indexOf(m[1]) < 0) buttonUrls.push(m[1]);
-      console.log('[UHDMovies] JS-embedded URL: ' + m[1].substring(0, 100));
-    }
-
-    if (buttonUrls.length === 0) {
-      console.log('[UHDMovies] No button candidates found. HTML structure changed.');
-      return null;
-    }
-
-    for (let ci = 0; ci < buttonUrls.length; ci++) {
-      const candidateUrl = buttonUrls[ci];
-      console.log('[UHDMovies] Trying candidate: ' + candidateUrl.substring(0, 100));
-
-      if (/\.mkv|\.mp4|r2\.cloudflarestorage\.com|pixeldrain\.dev\/api\/file/i.test(candidateUrl)) {
-        console.log('[UHDMovies] Direct file URL: ' + candidateUrl.substring(0, 100));
-        return candidateUrl;
-      }
-
-      try {
-        const innerResp = await makeRequest(candidateUrl, {
-          headers: { 'Referer': hubcloudUrl }
-        });
-        const innerHtml = await innerResp.text();
-        console.log('[UHDMovies] Inner page: ' + innerHtml.length + ' chars');
-
-        const metaMatch = innerHtml.match(/<meta[^>]*http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'\s]+)/i);
-        if (metaMatch) {
-          console.log('[UHDMovies] Meta refresh found: ' + metaMatch[1].substring(0, 100));
-          return metaMatch[1];
-        }
-
-        const jsRedirect = innerHtml.match(/(?:window\.location\.(?:href|replace)|location\.href)\s*[=\(]\s*["']([^"']+)["']/i);
-        if (jsRedirect) {
-          console.log('[UHDMovies] JS redirect found: ' + jsRedirect[1].substring(0, 100));
-          return jsRedirect[1];
-        }
-
-        const fileMatch = innerHtml.match(/["'](https?:\/\/[^"'\s]*?\.(?:mkv|mp4)[^"'\s]*)["']/i);
-        if (fileMatch) {
-          console.log('[UHDMovies] File link found: ' + fileMatch[1].substring(0, 100));
-          return fileMatch[1];
-        }
-
-        const r2Match = innerHtml.match(/["'](https?:\/\/[^"'\s]*?(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain)[^"'\s]*)["']/i);
-        if (r2Match) {
-          console.log('[UHDMovies] R2/Workers link: ' + r2Match[1].substring(0, 100));
-          return r2Match[1];
-        }
-
-        console.log('[UHDMovies] No link found on inner page, trying next candidate...');
-      } catch (e) {
-        console.log('[UHDMovies] Inner fetch failed: ' + e.message);
-      }
-    }
-
-    console.log('[UHDMovies] All candidates failed');
-    return null;
-
-  } catch (error) {
-    console.error('[UHDMovies] HubCloud resolve failed: ' + error.message);
-    return null;
-  }
-}
-
-async function resolveSidToDriveleech(sidUrl) {
-  console.log('[UHDMovies] Resolving SID: ' + sidUrl);
-  const origin = new URL(sidUrl).origin;
-
-  try {
-    const responseStep0 = await makeRequest(sidUrl);
-    const html0 = await responseStep0.text();
-
-    const wpHttpRegex = /<input[^>]*name="_wp_http"[^>]*value="([^"]*)"[^>]*>/i;
-    const actionRegex = /<form[^>]*id="landing"[^>]*action="([^"]*)"[^>]*>/i;
-    const wpHttpMatch = wpHttpRegex.exec(html0);
-    const actionMatch = actionRegex.exec(html0);
-
-    if (!wpHttpMatch || !actionMatch) return null;
-
-    const step1Data = new URLSearchParams({ '_wp_http': wpHttpMatch[1] });
-    const responseStep1 = await fetch(actionMatch[1], {
-      method: 'POST',
-      body: step1Data,
-      headers: {
-        'Referer': sidUrl,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    const html1 = await responseStep1.text();
-
-    const action2Regex = /<form[^>]*id="landing"[^>]*action="([^"]*)"[^>]*>/i;
-    const wpHttp2Regex = /<input[^>]*name="_wp_http2"[^>]*value="([^"]*)"[^>]*>/i;
-    const tokenRegex = /<input[^>]*name="token"[^>]*value="([^"]*)"[^>]*>/i;
-
-    const action2Match = action2Regex.exec(html1);
-    const wpHttp2Match = wpHttp2Regex.exec(html1);
-    const tokenMatch = tokenRegex.exec(html1);
-
-    if (!action2Match) return null;
-
-    const step2Data = new URLSearchParams({
-      '_wp_http2': wpHttp2Match ? wpHttp2Match[1] : '',
-      'token': tokenMatch ? tokenMatch[1] : ''
-    });
-    const responseStep2 = await fetch(action2Match[1], {
-      method: 'POST',
-      body: step2Data,
-      headers: {
-        'Referer': responseStep1.url,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    const html2 = await responseStep2.text();
-
-    const cookieMatch = html2.match(/s_343\('([^']+)',\s*'([^']+)'/);
-    const linkMatch = html2.match(/c\.setAttribute\("href",\s*"([^"]+)"\)/);
-
-    if (!cookieMatch || !linkMatch) return null;
-
-    const finalUrl = new URL(linkMatch[1].trim(), origin).href;
-    const finalResponse = await fetch(finalUrl, {
-      headers: {
-        'Referer': responseStep2.url,
-        'Cookie': cookieMatch[1].trim() + '=' + cookieMatch[2].trim(),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    const finalHtml = await finalResponse.text();
-    const metaRefreshRegex = /<meta[^>]*http-equiv="refresh"[^>]*content="[^"]*url=([^"]*)"[^>]*>/i;
-    const metaMatch = metaRefreshRegex.exec(finalHtml);
-
-    if (metaMatch && metaMatch[1]) {
-      return metaMatch[1].replace(/['"]/g, '');
-    }
-
-    return null;
-  } catch (error) {
-    console.error('[UHDMovies] SID resolve failed: ' + error.message);
-    return null;
-  }
-}
-
-async function resolveDownloadLink(linkInfo) {
-  try {
-    console.log('[UHDMovies] Resolving: ' + linkInfo.quality + ' -> ' + linkInfo.url.substring(0, 80));
-
-    if (isHubCloudLink(linkInfo.url)) {
-      const finalUrl = await resolveHubCloudLink(linkInfo.url);
-      if (!finalUrl) {
-        console.log('[UHDMovies] HubCloud resolution failed');
-        return null;
-      }
-
-      return {
-        name: 'UHD Movies',
-        title: linkInfo.quality + '\n' + (linkInfo.size || 'Unknown'),
-        url: finalUrl,
-        quality: linkInfo.quality,
-        size: linkInfo.size,
-        type: 'direct'
-      };
-    }
-
-    let resolvedUrl = null;
-    if (isSidLink(linkInfo.url)) {
-      resolvedUrl = await resolveSidToDriveleech(linkInfo.url);
-    } else if (linkInfo.url.indexOf('driveleech.net') >= 0 || linkInfo.url.indexOf('driveseed.org') >= 0) {
-      resolvedUrl = linkInfo.url;
-    }
-
-    if (!resolvedUrl) {
-      console.log('[UHDMovies] Could not resolve link');
-      return null;
-    }
-
-    if (resolvedUrl.indexOf('driveleech.net') < 0 && resolvedUrl.indexOf('driveseed.org') < 0) {
-      console.log('[UHDMovies] Unsupported resolved URL: ' + resolvedUrl.substring(0, 80));
-      return null;
-    }
-
-    if (resolvedUrl.indexOf('driveseed.org') >= 0) {
-      const response = await makeRequest(resolvedUrl, {
-        headers: { 'Referer': 'https://links.modpro.blog/' }
-      });
-      const html = await response.text();
-      const $ = cheerio.load(html);
-
-      let size = 'Unknown';
-      let fileName = null;
-      $('ul.list-group li').each(function(i, el) {
-        const text = $(el).text();
-        if (text.indexOf('Size :') >= 0) size = text.split(':')[1].trim();
-        else if (text.indexOf('Name :') >= 0) fileName = text.split(':')[1].trim();
-      });
-
-      const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
-      const instantLink = $('a:contains("Instant Download")').attr('href');
-
-      let finalUrl = null;
-
-      if (resumeCloudLink) {
-        const resumeUrl = resumeCloudLink.indexOf('http') === 0 ? resumeCloudLink : 'https://driveseed.org' + resumeCloudLink;
-        try {
-          const resumeResp = await makeRequest(resumeUrl, { headers: { 'Referer': 'https://driveseed.org/' } });
-          const resumeHtml = await resumeResp.text();
-          const $$ = cheerio.load(resumeHtml);
-          finalUrl = $$('a:contains("Cloud Resume Download")').attr('href');
-        } catch (e) {
-          console.log('[UHDMovies] Resume Cloud failed: ' + e.message);
-        }
-      }
-
-      if (!finalUrl && instantLink) {
-        finalUrl = instantLink;
-      }
-
-      if (!finalUrl) return null;
-
-      if (finalUrl.indexOf('workers.dev') >= 0) {
-        const parts = finalUrl.split('/');
-        const fn = parts[parts.length - 1];
-        parts[parts.length - 1] = fn.replace(/ /g, '%20');
-        finalUrl = parts.join('/');
-      }
-
-      return {
-        name: 'UHD Movies',
-        title: (fileName || linkInfo.quality) + '\n' + size,
-        url: finalUrl,
-        quality: linkInfo.quality,
-        size: size,
-        type: 'direct'
-      };
-    }
-
-    return null;
-
-  } catch (error) {
-    console.error('[UHDMovies] Failed to resolve: ' + error.message);
-    return null;
-  }
-}
-
-async function extractDownloadLinks(movieUrl, targetYear) {
-  try {
-    console.log('[UHDMovies] Extracting from: ' + movieUrl);
-    const response = await makeRequest(movieUrl);
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    const links = [];
-
-    $('a[href]').each(function(index, element) {
-      const href = $(element).attr('href');
-      if (!href) return;
-
-      const isSid = isSidLink(href);
-      const isHubCloud = isHubCloudLink(href);
-
-      if (!isSid && !isHubCloud) return;
-      if (links.some(function(item) { return item.url === href; })) return;
-
-      let quality = 'Unknown Quality';
-      let size = 'Unknown';
-
-      let current = $(element).parent();
-      for (let i = 0; i < 8; i++) {
-        if (current.length === 0) break;
-        const text = current.text().trim();
-        if (text.length > 15 &&
-            /(1080p|720p|2160p|4k|480p|hevc|x264|x265|web-dl|bluray)/i.test(text)) {
-          quality = text;
-          break;
-        }
-        current = current.prev();
-      }
-
-      const sizeMatch = quality.match(/\[([0-9.,]+\s*[KMGT]B[^\]]*)\]/i);
-      if (sizeMatch) size = sizeMatch[1];
-
-      if (targetYear && quality !== 'Unknown Quality') {
-        const yearMatches = quality.match(/\b(19|20)\d{2}\b/g);
-        if (yearMatches && yearMatches.length > 0) {
-          const hasTarget = yearMatches.some(function(y) { return parseInt(y) === targetYear; });
-          if (!hasTarget) return;
-        }
-      }
-
-      const cleanQuality = extractCleanQuality(quality);
-      links.push({
-        url: href,
-        quality: cleanQuality,
-        size: size,
-        rawQuality: quality.replace(/\s+/g, ' ').trim()
-      });
-    });
-
-    console.log('[UHDMovies] Extracted ' + links.length + ' links');
-    return links;
-  } catch (error) {
-    console.error('[UHDMovies] Extract failed: ' + error.message);
-    return [];
-  }
-}
-
-async function extractTvShowDownloadLinks(showPageUrl, targetSeason, targetEpisode) {
-  try {
-    console.log('[UHDMovies] TV: ' + showPageUrl + ' S' + targetSeason + 'E' + targetEpisode);
-    const response = await makeRequest(showPageUrl);
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    const links = [];
-
-    let inTargetSeason = false;
-    let qualityText = '';
-
-    $('.entry-content').find('*').each(function(index, element) {
-      const $el = $(element);
-      const text = $el.text().trim();
-      const seasonMatch = text.match(/^SEASON\s+(\d+)/i);
-
-      if (seasonMatch) {
-        const num = parseInt(seasonMatch[1], 10);
-        if (num === targetSeason) {
-          inTargetSeason = true;
-          console.log('[UHDMovies] In Season ' + targetSeason);
-        } else if (inTargetSeason) {
-          inTargetSeason = false;
+      if (/^SEASON\s+\d+/i.test(txt)) {
+        if (txt.toUpperCase().indexOf(sLabel) === 0) {
+          inSeason = true;
+        } else if (inSeason) {
+          inSeason = false;
           return false;
         }
       }
 
-      if (!inTargetSeason) return;
+      if (!inSeason) return;
 
-      if ($el.is('pre, p:has(strong), p:has(b), h3, h4, div:has(strong)')) {
-        const headerText = $el.text().trim();
-        if (headerText.length > 10 && headerText.length < 500 &&
-            /(1080p|720p|2160p|4k|480p|hevc|x264|x265|web-dl)/i.test(headerText) &&
-            !/plot|screenshot|trailer/i.test(headerText) &&
-            !$el.find('a').length) {
-          qualityText = headerText;
+      if ($el.is('p, h3, h4, pre, div') && !$el.find('a').length) {
+        if (txt.length > 10 && txt.length < 400) {
+          if (/1080p|720p|2160p|4k|480p|hevc|x264|x265|web-dl/i.test(txt)) {
+            currentQuality = txt;
+          }
         }
       }
 
-      const episodeRegex = new RegExp('^Episode\\s+0*' + targetEpisode + '(?!\\d)', 'i');
-      $el.find('a[href]').each(function(i, a) {
-        const href = $(a).attr('href');
-        const linkText = $(a).text().trim();
+      $el.find('a[href]').each(function(j, a) {
+        var href = $(a).attr('href');
+        var atxt = $(a).text().trim();
+        if (!href || !atxt) return;
+        if (!hasPattern(href, SID_HOSTS) && !hasPattern(href, HUB_HOSTS)) return;
+        if (atxt.toLowerCase().indexOf(epPattern.toLowerCase()) < 0) return;
 
-        if (!href) return;
-        if (!isSidLink(href) && !isHubCloudLink(href)) return;
-        if (!episodeRegex.test(linkText)) return;
-        if (links.some(function(item) { return item.url === href; })) return;
+        if (links.some(function(l) { return l.url === href; })) return;
 
-        const sizeMatch = qualityText.match(/\[([0-9.,]+\s*[KMGT]B)/i);
-        const size = sizeMatch ? sizeMatch[1].replace(/[\[\]]/g, '').trim() : 'Unknown';
-
-        const cleanQuality = extractCleanQuality(qualityText);
         links.push({
           url: href,
-          quality: cleanQuality,
-          size: size,
-          rawQuality: qualityText.replace(/\s+/g, ' ').trim().substring(0, 200)
+          quality: cleanQuality(currentQuality),
+          rawQuality: currentQuality,
+          size: 'Unknown'
         });
-
-        console.log('[UHDMovies] Found: ' + cleanQuality + ' -> ' + href.substring(0, 60));
+        console.log('[UHDMovies] Found link: ' + href.substring(0, 80));
       });
     });
 
-    console.log('[UHDMovies] Found ' + links.length + ' episode links');
+    console.log('[UHDMovies] Total links: ' + links.length);
     return links;
-  } catch (error) {
-    console.error('[UHDMovies] TV extract failed: ' + error.message);
+  } catch (e) {
+    console.log('[UHDMovies] Extract error: ' + e.message);
     return [];
+  }
+}
+
+async function resolveHubCloud(url) {
+  console.log('[UHDMovies] HubCloud: ' + url);
+  try {
+    var resp = await makeRequest(url, { headers: { 'Referer': BASE_DOMAIN + '/' } });
+    var html = await resp.text();
+    console.log('[UHDMovies] HubCloud HTML: ' + html.length);
+    console.log('[UHDMovies] HTML sample: ' + html.substring(0, 500).replace(/\s+/g, ' '));
+
+    var $ = cheerio.load(html);
+    var found = null;
+    var base = url.split('/').slice(0, 3).join('/');
+
+    $('a[href]').each(function(i, el) {
+      if (found) return;
+      var href = $(el).attr('href');
+      var text = $(el).text().trim().toLowerCase();
+      if (!href) return;
+
+      if (/r2\.cloudflarestorage\.com|pixeldrain\.dev|workers\.dev|\.mkv|\.mp4/i.test(href)) {
+        found = href;
+        return;
+      }
+
+      if (/r2|10gbps|pixel|download|instant|direct/i.test(text) && !/donate|support/i.test(text)) {
+        var abs = href.indexOf('http') === 0 ? href : base + (href.charAt(0) === '/' ? '' : '/') + href;
+        found = abs;
+        return;
+      }
+    });
+
+    if (!found) {
+      var m = html.match(/["'](https?:\/\/[^"'\s]*(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain\.dev)[^"'\s]*)["']/i);
+      if (m) found = m[1];
+    }
+
+    if (!found) {
+      console.log('[UHDMovies] No link found in HubCloud page');
+      return null;
+    }
+
+    if (/\.mkv|\.mp4|r2\.cloudflarestorage|pixeldrain/i.test(found)) {
+      console.log('[UHDMovies] Direct URL: ' + found.substring(0, 100));
+      return found;
+    }
+
+    console.log('[UHDMovies] Following: ' + found.substring(0, 100));
+    var resp2 = await makeRequest(found, { headers: { 'Referer': url } });
+    var html2 = await resp2.text();
+    var m2 = html2.match(/<meta[^>]*refresh[^>]*url=([^"'\s>]+)/i);
+    if (m2) return m2[1];
+    var m3 = html2.match(/["'](https?:\/\/[^"'\s]*?\.(?:mkv|mp4)[^"'\s]*)["']/i);
+    if (m3) return m3[1];
+    var m4 = html2.match(/["'](https?:\/\/[^"'\s]*(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain)[^"'\s]*)["']/i);
+    if (m4) return m4[1];
+
+    return null;
+  } catch (e) {
+    console.log('[UHDMovies] HubCloud error: ' + e.message);
+    return null;
   }
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
   mediaType = mediaType || 'movie';
-  console.log('[UHDMovies] Fetch: TMDB=' + tmdbId + ', Type=' + mediaType + (mediaType === 'tv' ? ', S' + season + 'E' + episode : ''));
+  console.log('[UHDMovies] Start tmdb=' + tmdbId + ' type=' + mediaType + ' s=' + season + ' e=' + episode);
 
   try {
-    const tmdbUrl = 'https://api.themoviedb.org/3/' + (mediaType === 'tv' ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_API_KEY;
-    const tmdbResponse = await makeRequest(tmdbUrl);
-    const tmdbData = await tmdbResponse.json();
+    var tmdbUrl = 'https://api.themoviedb.org/3/' + (mediaType === 'tv' ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_API_KEY;
+    var tmdbResp = await makeRequest(tmdbUrl);
+    var data = await tmdbResp.json();
+    var title = mediaType === 'tv' ? data.name : data.title;
+    if (!title) return [];
 
-    const mediaInfo = {
-      title: mediaType === 'tv' ? tmdbData.name : tmdbData.title,
-      year: parseInt(((mediaType === 'tv' ? tmdbData.first_air_date : tmdbData.release_date) || '').split('-')[0], 10)
-    };
+    console.log('[UHDMovies] Title: ' + title);
 
-    if (!mediaInfo.title) throw new Error('No title from TMDB');
+    var searchResults = await searchMovies(title);
+    if (searchResults.length === 0) {
+      var short = title.split(':')[0].trim();
+      if (short !== title) searchResults = await searchMovies(short);
+    }
 
-    console.log('[UHDMovies] TMDB: "' + mediaInfo.title + '" (' + mediaInfo.year + ')');
+    if (searchResults.length === 0) return [];
 
-    let searchTitle = mediaInfo.title.replace(/:/g, '').replace(/\s*&\s*/g, ' and ');
-    let searchResults = await searchMovies(searchTitle);
+    var best = searchResults[0];
+    var links = [];
 
-    if (searchResults.length === 0 || !searchResults.some(function(r) { return compareMedia(mediaInfo, r); })) {
-      console.log('[UHDMovies] Trying fallback search...');
-      const fallback = mediaInfo.title.split(':')[0].trim();
-      if (fallback !== searchTitle) {
-        searchResults = await searchMovies(fallback);
+    if (mediaType === 'tv' && season && episode) {
+      links = await extractTvLinks(best.url, season, episode);
+    }
+
+    console.log('[UHDMovies] Links to resolve: ' + links.length);
+    if (links.length === 0) return [];
+
+    var streams = [];
+    for (var i = 0; i < links.length; i++) {
+      var l = links[i];
+      if (hasPattern(l.url, HUB_HOSTS)) {
+        var finalUrl = await resolveHubCloud(l.url);
+        if (finalUrl) {
+          streams.push({
+            name: 'UHD Movies',
+            title: l.quality + '\n' + (l.size || 'Unknown'),
+            url: finalUrl,
+            quality: l.quality,
+            size: l.size
+          });
+        }
       }
     }
 
-    if (searchResults.length === 0) {
-      console.log('[UHDMovies] No search results');
-      return [];
-    }
-
-    const bestMatch = searchResults.find(function(r) { return compareMedia(mediaInfo, r); }) || searchResults[0];
-    console.log('[UHDMovies] Match: "' + bestMatch.title + '" (' + bestMatch.year + ')');
-
-    let downloadLinks = [];
-    if (mediaType === 'tv' && season && episode) {
-      downloadLinks = await extractTvShowDownloadLinks(bestMatch.url, season, episode);
-    } else {
-      downloadLinks = await extractDownloadLinks(bestMatch.url);
-    }
-
-    if (downloadLinks.length === 0) {
-      console.log('[UHDMovies] No download links found');
-      return [];
-    }
-
-    const streamPromises = downloadLinks.map(function(link) { return resolveDownloadLink(link); });
-    const streams = (await Promise.all(streamPromises)).filter(Boolean);
-
-    streams.sort(function(a, b) { return parseSize(b.size) - parseSize(a.size); });
-
     console.log('[UHDMovies] Returning ' + streams.length + ' streams');
     return streams;
-  } catch (error) {
-    console.error('[UHDMovies] Error: ' + error.message);
+  } catch (e) {
+    console.log('[UHDMovies] Error: ' + e.message);
     return [];
   }
 }
