@@ -1,17 +1,19 @@
 /**
- * MultiShows Nuvio Provider  v3.2.1  (QuickJS syntax fix)
- * https://multishows.top — Movies / TV / Anime
+ * MultiShows Nuvio Provider  v3.3  (pure-ASCII, QuickJS-safe)
+ * https://multishows.top - Movies / TV / Anime
  *
  * Changelog:
- *  v3.2.1 — FIXED QuickJS SyntaxError: episode regex strings rebuilt cleanly
- *           (single-quoted strings containing \' broke parsing at main.js:336).
- *           Episode discovery: one clean regex (abs href / rel href / Nuxt JSON)
- *           + canonical /episode/{slug}/{s}-{e} probe fallback.
- *  v3.1 — download URLs appear once (as ⬇ Direct), no duplicates.
- *  v3.0 — direct slug access (52/52 verified vs real site), iframe deep-dig,
+ *  v3.3 - PURE ASCII build: all non-ASCII chars converted to \u escapes or
+ *         removed (emoji, bullets, zero-width literals, Arabic text).
+ *         QuickJS parsing can no longer break on encoding.
+ *  v3.2.1 - FIXED QuickJS SyntaxError: episode regex strings rebuilt cleanly.
+ *           Episode discovery: one clean regex (abs href / rel href / Nuxt
+ *           JSON) + canonical /episode/{slug}/{s}-{e} probe fallback.
+ *  v3.1 - download URLs appear once (as DL-Direct), no duplicates.
+ *  v3.0 - direct slug access (52/52 verified vs real site), iframe deep-dig,
  *         ad-wall detection, STRICT 4K & 1080p, downloads as direct streams.
  *
- * FLOW: TMDB → slug → /movie/{slug} or /tv-show/{slug} (+episode page)
+ * FLOW: TMDB -> slug -> /movie/{slug} or /tv-show/{slug} (+episode page)
  *       fallback: /?s= search. Downloads served as DIRECT playable streams.
  */
 
@@ -22,7 +24,7 @@ var Q4K = /(2160|4k|uhd)/i;
 var Q1080 = /(1080|fhd)/i;
 var WALL_RE = /choose security mode|disable your ad-blocker|ad detector/i;
 
-// ── TMDB key pool ────────────────────────────────────────────────────────────
+// --- TMDB key pool ---
 function getTmdbKey() {
     try {
         if (typeof globalThis !== "undefined" && globalThis.TMDB_API_KEY) return globalThis.TMDB_API_KEY;
@@ -68,7 +70,7 @@ function resolveSettings(customSettings) {
     return out;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ---
 function stripTags(html) {
     return String(html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -86,13 +88,13 @@ function normalize(t) {
 }
 
 /**
- * slugify — VERIFIED 52/52 against real multishows.top slugs.
+ * slugify - VERIFIED 52/52 against real multishows.top slugs.
  */
 function slugify(title) {
     var t = String(title || "").toLowerCase();
-    try { t = t.normalize("NFD").replace(/[̀-ͯ]/g, ""); } catch (e) {}
+    try { t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
     t = t.replace(/\([^)]*\)|\[[^\]]*\]/g, " ");
-    t = t.replace(/['’`]/g, "-").replace(/&/g, " ");
+    t = t.replace(/[''`]/g, "-").replace(/&/g, " ");
     t = t.replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
     return t;
 }
@@ -137,7 +139,7 @@ function getInvertedSortTag(score, maxScore) {
     var bin = inv.toString(2);
     while (bin.length < 20) bin = "0" + bin;
     var chars = [];
-    for (var i = 0; i < bin.length; i++) chars.push(bin.charAt(i) === "1" ? "﻿" : "​");
+    for (var i = 0; i < bin.length; i++) chars.push(bin.charAt(i) === "1" ? "\uFEFF" : "\u200B");
     return chars.join("");
 }
 
@@ -145,7 +147,7 @@ function isWall(html) {
     return WALL_RE.test(String(html || "").slice(0, 8000));
 }
 
-// Diagnostic dump — prints HTML slices around key markers (only when empty)
+// Diagnostic dump - prints HTML slices around key markers (only when empty)
 function debugDump(html, tag) {
     try {
         var markers = ["__NUXT__", "sources", "servers", "streams", "iframe", "m3u8", ".mp4", "download", "player"];
@@ -160,7 +162,7 @@ function debugDump(html, tag) {
     } catch (e) {}
 }
 
-// ── Entry Point ───────────────────────────────────────────────────────────────
+// --- Entry Point ---
 function getStreams(tmdbId, mediaType, season, episode) {
     var rawId = tmdbId;
     if (typeof tmdbId === "object" && tmdbId !== null) {
@@ -176,7 +178,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
 
     return resolveTmdbInfo(cleanId, type).then(function (info) {
         if (!info.title) {
-            console.log("[multishows] no title resolved — aborting");
+            console.log("[multishows] no title resolved - aborting");
             return [];
         }
         console.log("[multishows] title: " + info.title + " (" + info.year + ")");
@@ -217,7 +219,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
     });
 }
 
-// ── TMDB: id → title/year ────────────────────────────────────────────────────
+// --- TMDB: id -> title/year ---
 function resolveTmdbInfo(id, type) {
     var key = getTmdbKey();
     function fromTmdb(d) {
@@ -243,7 +245,7 @@ function resolveTmdbInfo(id, type) {
         .catch(function () { return { title: "", original: "", year: "" }; });
 }
 
-// ── slug → direct page, fallback search ─────────────────────────────────────
+// --- slug -> direct page, fallback search ---
 function findPageUrl(info, type) {
     var kind = type === "tv" ? "tv-show" : "movie";
     var slugs = [];
@@ -321,20 +323,20 @@ function pickBest(results, info, wantKind) {
     return (best && bestScore >= 6) ? best : null;
 }
 
-// ── v3.2.1: Episode URL — regex واحد نظيف + مسار قانوني احتياطي ──────────────
+// --- Episode URL: one clean regex + canonical route probe fallback ---
 function findEpisodeUrl(showUrl, season, episode, slug) {
     return fetchText(showUrl).then(function (html) {
         if (isWall(html)) return "";
         var want = "/" + season + "-" + episode;
-        // يغطي: href مطلق + href نسبي + JSON مضمّن (Nuxt) — بدون علامات تنصيص داخلة
+        // covers: absolute href, relative href, embedded Nuxt JSON state
         var re = new RegExp("(/episode/[a-z0-9\\-]+?" + want + ")(?![0-9])", "i");
         var m = re.exec(html);
         if (m) return BASE + m[1];
 
-        // احتياطي: ابنِ المسار القانوني وتحقق من وجوده
+        // fallback: build the canonical route and verify it exists
         if (slug) {
             var guess = BASE + "/episode/" + slug + "/" + season + "-" + episode;
-            console.log("[multishows] path not in show HTML — probing canonical route");
+            console.log("[multishows] path not in show HTML - probing canonical route");
             return fetchText(guess).then(function (epHtml) {
                 if (isWall(epHtml)) return guess;
                 if (/og:title|<article|season|watch/i.test(epHtml) &&
@@ -350,7 +352,7 @@ function findEpisodeUrl(showUrl, season, episode, slug) {
     });
 }
 
-// ── Server extraction (multi-pattern + iframe dig) ───────────────────────────
+// --- Server extraction (multi-pattern + iframe dig) ---
 function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
     // Pattern A: data-url / data-src / data-link / data-file elements
     var reData = /<(?:button|li|a|div|span)[^>]*data-(?:url|src|link|file|video)=["']([^"']+)["'][^>]*>([\s\S]{0,160}?)<\/(?:button|li|a|div|span)>/gi;
@@ -360,7 +362,7 @@ function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
         if (au && !seenS[au]) { streams.push({ url: au, label: stripTags(m[2]) }); seenS[au] = true; }
     }
 
-    // Pattern B: iframes — same-origin player pages included
+    // Pattern B: iframes - same-origin player pages included
     var iframes = [];
     var reIframe = /<iframe[^>]+src=["']([^"']+)["']/gi;
     while ((m = reIframe.exec(html)) !== null) {
@@ -368,127 +370,6 @@ function collectCandidates(html, pageUrl, streams, downloads, seenS, seenD) {
         if (iu && !/^javascript:|^data:/i.test(iu) && !seenS[iu]) { iframes.push(iu); }
     }
 
-    // Pattern C: direct file URLs — label from the FILE NAME itself only
+    // Pattern C: direct file URLs - label from the FILE NAME itself only
     var reFile = /(https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4|mkv|webm)(?:\?[^\s"'<>\\]*)?)/gi;
-    while ((m = reFile.exec(html)) !== null) {
-        if (!seenS[m[1]]) { streams.push({ url: m[1], label: "" }); seenS[m[1]] = true; }
-    }
-
-    // Pattern D: download links — SEPARATE dedup set
-    var reDl = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]{0,140}?)<\/a>/gi;
-    while ((m = reDl.exec(html)) !== null) {
-        var hu = absUrl(m[1], pageUrl);
-        var txt = stripTags(m[2]);
-        if (!hu || seenD[hu]) continue;
-        if (/download|تحميل|dl\./i.test(hu) || /download|تحميل/i.test(txt)) {
-            downloads.push({ url: hu, label: txt || "Download" }); seenD[hu] = true;
-        }
-    }
-
-    // Pattern E: embedded JSON — explicit quality field when present
-    var reJson = /"(?:servers|sources|streams)"\s*:\s*(\[[\s\S]{0,4000}?\])\s*[,}\]]/g;
-    while ((m = reJson.exec(html)) !== null) {
-        try {
-            var arr = JSON.parse(m[1]);
-            for (var i = 0; i < arr.length; i++) {
-                var s = arr[i] || {};
-                var ju = absUrl(s.file || s.url || s.src || s.link || "", pageUrl);
-                if (!ju || seenS[ju]) continue;
-                var lbl = [s.name || s.title || s.label || "", s.quality || ""].join(" ").trim();
-                var q = "";
-                var sq = String(s.quality || "").toLowerCase();
-                if (Q4K.test(sq)) q = "4K";
-                else if (Q1080.test(sq)) q = "1080p";
-                streams.push({ url: ju, label: lbl, q: q }); seenS[ju] = true;
-            }
-        } catch (e) {}
-    }
-
-    return iframes;
-}
-
-function buildStreams(html, pageUrl, settings) {
-    var streams = [], downloads = [];
-    var seenS = {}, seenD = {};
-
-    var iframes = collectCandidates(html, pageUrl, streams, downloads, seenS, seenD);
-    console.log("[multishows] page gave " + streams.length + " stream candidate(s), " +
-        downloads.length + " download(s), " + iframes.length + " iframe(s)");
-
-    // resolve embed iframes ONE level deep (+ one inner level)
-    function digIframe(i) {
-        if (i >= iframes.length || i >= 4) return Promise.resolve();
-        return fetchText(iframes[i]).then(function (sub) {
-            var subStreams = [], subDl = [];
-            var subIframes = collectCandidates(sub, iframes[i], subStreams, subDl, seenS, seenD);
-            for (var j = 0; j < subStreams.length; j++) {
-                var c = subStreams[j];
-                if (!c.label) {
-                    var host = "embed";
-                    try { host = new URL(iframes[i]).hostname.replace(/^www\./, ""); } catch (e) {}
-                    c.label = host;
-                }
-                streams.push(c);
-            }
-            for (var k = 0; k < subDl.length; k++) downloads.push(subDl[k]);
-
-            function digInner(x) {
-                if (x >= subIframes.length || x >= 2) return Promise.resolve();
-                return fetchText(subIframes[x]).then(function (sub2) {
-                    var s2 = [], d2 = [];
-                    collectCandidates(sub2, subIframes[x], s2, d2, seenS, seenD);
-                    for (var a = 0; a < s2.length; a++) {
-                        if (!s2[a].label) {
-                            try { s2[a].label = new URL(subIframes[x]).hostname.replace(/^www\./, ""); } catch (e) {}
-                        }
-                        streams.push(s2[a]);
-                    }
-                    for (var b = 0; b < d2.length; b++) downloads.push(d2[b]);
-                }).catch(function () {}).then(function () { return digInner(x + 1); });
-            }
-            return digInner(0);
-        }).catch(function (e) {
-            console.log("[multishows] iframe " + i + " failed: " + e.message);
-        }).then(function () { return digIframe(i + 1); });
-    }
-
-    return digIframe(0).then(function () {
-        if (streams.length === 0 && downloads.length === 0) {
-            console.log("[multishows] EMPTY page — dumping markers for diagnosis:");
-            debugDump(html, "watch");
-        }
-
-        // ── STRICT 4K & 1080p filter ────────────────────────────────────────
-        function fq(list, isDl) {
-            var out = [], seen = {};
-            for (var i = 0; i < list.length; i++) {
-                var it = list[i];
-                var q = it.q || classifyQuality(it.label, it.url);
-                if (!q) continue;
-                if (settings.qualityMode === "4k" && q !== "4K") continue;
-                if (settings.qualityMode === "1080p" && q !== "1080p") continue;
-                if (seen[it.url]) continue;
-                seen[it.url] = true;
-                out.push({ url: it.url, label: it.label, quality: q, dl: !!isDl });
-            }
-            out.sort(function (a, b) { return a.quality === b.quality ? 0 : (a.quality === "4K" ? -1 : 1); });
-            return out;
-        }
-
-        // downloads served DIRECTLY as playable streams; each URL appears once
-        var dlUrls = {};
-        for (var di = 0; di < downloads.length; di++) dlUrls[downloads[di].url] = true;
-        var uniqueStreams = streams.filter(function (s) { return !dlUrls[s.url]; });
-
-        var final = fq(uniqueStreams, false);
-        if (settings.directDownload) final = final.concat(fq(downloads, true));
-        if (!final.length) final = fq(downloads, true);
-
-        console.log("[multishows] final streams: " + final.length +
-            " (streams " + final.filter(function (x) { return !x.dl; }).length +
-            ", direct-download " + final.filter(function (x) { return x.dl; }).length + ")");
-
-        return final.map(function (s) {
-            var qUp = s.quality.toUpperCase();
-            var host = "CDN";
-            try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch
+    while ((m = re
