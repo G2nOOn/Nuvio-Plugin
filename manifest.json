@@ -42,13 +42,13 @@
       "contentLanguage": ["en"]
     },
     {
-      "id": "multishows",
-      "name": "Multishows",
-      "description": "Multishows — krmz.onl | STRICT 1080p ONLY",
+      "id": "uhdmovies",
+      "name": "UHDmovies",
+      "description": "uhdmovies — krmz.onl | STRICT 1080p ONLY",
       "version": "3.3",
       "author": "LO",
       "supportedTypes": ["tv"],
-      "filename": "providers/multishows.js",
+      "filename": "providers/uhdmovies.js",
       "enabled": true,
       "formats": ["m3u8"],
       "logo": "https://krmz.onl/favicon.ico",
