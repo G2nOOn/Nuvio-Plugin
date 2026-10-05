@@ -98,12 +98,10 @@ async function makeRequest(url, options = {}) {
   return response;
 }
 
-// Helper: is this a SID link?
 function isSidLink(url) {
   return SID_PATTERNS.some(p => url && url.includes(p));
 }
 
-// Helper: is this a HubCloud link?
 function isHubCloudLink(url) {
   return HUB_CLOUD_PATTERNS.some(p => url && url.includes(p));
 }
@@ -226,87 +224,119 @@ function parseSize(sizeString) {
   }
 }
 
-// ========== HUB CLOUD RESOLUTION ==========
+// ========== HUB CLOUD RESOLUTION (FIXED) ==========
 async function resolveHubCloudLink(hubcloudUrl) {
   console.log(`[UHDMovies] Resolving HubCloud: ${hubcloudUrl}`);
 
   try {
-    // Fetch HubCloud page
+    // Step 1: Fetch HubCloud landing page
     const response = await makeRequest(hubcloudUrl, {
       headers: { 'Referer': 'https://uhdmovies.my/' }
     });
     const html = await response.text();
     console.log(`[UHDMovies] HubCloud page: ${html.length} chars`);
 
-    // Look for direct download links
-    const $ = cheerio.load(html);
-    const links = [];
+    // LOG HTML SAMPLE for debugging
+    console.log(`[UHDMovies] HTML sample: ${html.substring(0, 800).replace(/\s+/g, ' ')}`);
 
-    // Pattern 1: Direct R2/Cloudflare links in <a> tags
+    const $ = cheerio.load(html);
+    const hubOrigin = new URL(hubcloudUrl).origin;
+
+    // Step 2: Find button candidates
+    const buttonUrls = new Set();
+
+    // Pattern A: buttons with text like "R2", "10Gbps", "PixelDrain", "Download"
+    $('a').each((i, el) => {
+      const text = $(el).text().trim();
+      const href = $(el).attr('href');
+      if (!href) return;
+
+      const lowerText = text.toLowerCase();
+      if (/r2|10gbps|pixel|drive|download|instant|direct/i.test(lowerText) &&
+          !/donate|support|telegram/i.test(lowerText)) {
+        const absUrl = href.startsWith('http') ? href : hubOrigin + (href.startsWith('/') ? '' : '/') + href;
+        buttonUrls.add(absUrl);
+        console.log(`[UHDMovies] Button candidate: "${text}" → ${absUrl.substring(0, 100)}`);
+      }
+    });
+
+    // Pattern B: any link with direct-download keywords in URL
     $('a[href]').each((i, el) => {
       const href = $(el).attr('href');
-      const text = $(el).text().trim();
-
       if (!href) return;
-
-      // Skip donate/support links
-      if (/donate|support|telegram|whatsapp/i.test(text) || /donate|support/i.test(href)) return;
-
-      // Match known direct hosting patterns
-      if (href.includes('r2.cloudflarestorage.com') ||
-          href.includes('workers.dev') ||
-          href.includes('pixeldrain') ||
-          href.includes('gpdl.') ||
-          href.includes('hubcloud') ||
-          href.includes('drive.google')) {
-        links.push({
-          url: href,
-          title: text || 'Download',
-          size: null
-        });
+      if (/r2\.cloudflarestorage|workers\.dev|pixeldrain|gpdl\.|hubcloud\.ist\/dl/i.test(href)) {
+        buttonUrls.add(href);
+        console.log(`[UHDMovies] Direct URL candidate: ${href.substring(0, 100)}`);
       }
     });
 
-    // Pattern 2: Extract from JavaScript vars (some HubCloud pages embed links in JS)
-    const jsLinkRegex = /["'](https:\/\/[^"']*?(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain\.dev\/api\/file)[^"']*)["']/gi;
-    let jsMatch;
-    while ((jsMatch = jsLinkRegex.exec(html)) !== null) {
-      const link = jsMatch[1];
-      if (!links.some(l => l.url === link)) {
-        links.push({ url: link, title: 'Direct Link', size: null });
-      }
+    // Pattern C: JS-embedded URLs
+    const jsRegex = /["'](https?:\/\/[^"'\s]*?(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain\.dev\/api\/file|gpdl\.[^"'\s]*?))[^"'\s]*/gi;
+    let m;
+    while ((m = jsRegex.exec(html)) !== null) {
+      buttonUrls.add(m[1]);
+      console.log(`[UHDMovies] JS-embedded URL: ${m[1].substring(0, 100)}`);
     }
 
-    // Pattern 3: "R2" or "10Gbps" or "PixelDrain" buttons
-    $('a').each((i, el) => {
-      const href = $(el).attr('href');
-      const text = $(el).text().trim().toLowerCase();
-      if (!href) return;
-
-      if (text.includes('r2') || text.includes('10gbps') ||
-          text.includes('pixeldrain') || text.includes('direct')) {
-        if (href.startsWith('http') && !links.some(l => l.url === href)) {
-          links.push({ url: href, title: text, size: null });
-        }
-      }
-    });
-
-    if (links.length === 0) {
-      console.log(`[UHDMovies] No HubCloud links found in page`);
-      // Dump sample of HTML to see structure
-      console.log(`[UHDMovies] HTML sample: ${html.substring(0, 500)}`);
+    if (buttonUrls.size === 0) {
+      console.log(`[UHDMovies] ⚠️ No button candidates found. HTML structure changed.`);
       return null;
     }
 
-    // Prefer direct download URLs
-    const directLink = links.find(l =>
-      l.url.includes('r2.cloudflarestorage.com') ||
-      l.url.includes('workers.dev') ||
-      l.url.includes('pixeldrain')
-    ) || links[0];
+    // Step 3: Try each candidate URL
+    for (const candidateUrl of buttonUrls) {
+      console.log(`[UHDMovies] Trying candidate: ${candidateUrl.substring(0, 100)}`);
 
-    console.log(`[UHDMovies] HubCloud resolved to: ${directLink.url.substring(0, 100)}...`);
-    return directLink.url;
+      // If it's already a direct file URL, return it
+      if (/\.mkv|\.mp4|r2\.cloudflarestorage\.com|pixeldrain\.dev\/api\/file/i.test(candidateUrl)) {
+        console.log(`[UHDMovies] ✓ Direct file URL: ${candidateUrl.substring(0, 100)}`);
+        return candidateUrl;
+      }
+
+      // Otherwise fetch and look for redirect
+      try {
+        const innerResp = await makeRequest(candidateUrl, {
+          headers: { 'Referer': hubcloudUrl }
+        });
+        const innerHtml = await innerResp.text();
+        console.log(`[UHDMovies] Inner page: ${innerHtml.length} chars`);
+
+        // Look for meta refresh
+        const metaMatch = innerHtml.match(/<meta[^>]*http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'\s]+)/i);
+        if (metaMatch) {
+          console.log(`[UHDMovies] ✓ Meta refresh found: ${metaMatch[1].substring(0, 100)}`);
+          return metaMatch[1];
+        }
+
+        // Look for JS redirects
+        const jsRedirect = innerHtml.match(/(?:window\.location\.(?:href|replace)|location\.href)\s*[=\(]\s*["']([^"']+)["']/i);
+        if (jsRedirect) {
+          console.log(`[UHDMovies] ✓ JS redirect found: ${jsRedirect[1].substring(0, 100)}`);
+          return jsRedirect[1];
+        }
+
+        // Look for direct file links
+        const fileMatch = innerHtml.match(/["'](https?:\/\/[^"'\s]*?\.(?:mkv|mp4)[^"'\s]*)["']/i);
+        if (fileMatch) {
+          console.log(`[UHDMovies] ✓ File link found: ${fileMatch[1].substring(0, 100)}`);
+          return fileMatch[1];
+        }
+
+        // Look for R2/workers.dev URLs
+        const r2Match = innerHtml.match(/["'](https?:\/\/[^"'\s]*?(?:r2\.cloudflarestorage\.com|workers\.dev|pixeldrain)[^"'\s]*)["']/i);
+        if (r2Match) {
+          console.log(`[UHDMovies] ✓ R2/Workers link: ${r2Match[1].substring(0, 100)}`);
+          return r2Match[1];
+        }
+
+        console.log(`[UHDMovies] No link found on inner page, trying next candidate...`);
+      } catch (e) {
+        console.log(`[UHDMovies] Inner fetch failed: ${e.message}`);
+      }
+    }
+
+    console.log(`[UHDMovies] ❌ All candidates failed`);
+    return null;
 
   } catch (error) {
     console.error(`[UHDMovies] HubCloud resolve failed: ${error.message}`);
@@ -397,7 +427,7 @@ async function resolveSidToDriveleech(sidUrl) {
   }
 }
 
-// Resolve download link (UPDATED: supports HubCloud)
+// Resolve download link (supports both HubCloud + SID)
 async function resolveDownloadLink(linkInfo) {
   try {
     console.log(`[UHDMovies] Resolving: ${linkInfo.quality} → ${linkInfo.url.substring(0, 80)}`);
@@ -428,12 +458,11 @@ async function resolveDownloadLink(linkInfo) {
       resolvedUrl = linkInfo.url;
     }
 
-    if (!resolvedUrl) {
+   Instant if (!resolvedUrl) Download {
       console.log(`[UHDMovies] Could not resolve link`);
       return null;
-    }
+")').   attr(' }
 
-    // Skip unsupported
     if (!resolvedUrl.includes('driveleech.net') && !resolvedUrl.includes('driveseed.org')) {
       console.log(`[UHDMovies] Unsupported resolved URL: ${resolvedUrl.substring(0, 80)}`);
       return null;
@@ -441,7 +470,6 @@ async function resolveDownloadLink(linkInfo) {
 
     // Handle driveseed
     if (resolvedUrl.includes('driveseed.org')) {
-      // Simplified: fetch and look for final download link
       const response = await makeRequest(resolvedUrl, {
         headers: { 'Referer': 'https://links.modpro.blog/' }
       });
@@ -456,9 +484,8 @@ async function resolveDownloadLink(linkInfo) {
         else if (text.includes('Name :')) fileName = text.split(':')[1].trim();
       });
 
-      // Look for resume cloud / instant download
       const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
-      const instantLink = $('a:contains("Instant Download")').attr('href');
+      const instantLink = $('a:contains("href');
 
       let finalUrl = null;
 
@@ -480,7 +507,6 @@ async function resolveDownloadLink(linkInfo) {
 
       if (!finalUrl) return null;
 
-      // URL-encode spaces in workers.dev URLs
       if (finalUrl.includes('workers.dev')) {
         const parts = finalUrl.split('/');
         const fn = parts[parts.length - 1];
@@ -506,7 +532,7 @@ async function resolveDownloadLink(linkInfo) {
   }
 }
 
-// Extract movie download links (UPDATED: supports HubCloud)
+// Extract movie download links (supports HubCloud)
 async function extractDownloadLinks(movieUrl, targetYear = null) {
   try {
     console.log(`[UHDMovies] Extracting from: ${movieUrl}`);
@@ -515,7 +541,6 @@ async function extractDownloadLinks(movieUrl, targetYear = null) {
     const $ = cheerio.load(html);
     const links = [];
 
-    // NEW: Collect ALL download-related links
     $('a[href]').each((index, element) => {
       const href = $(element).attr('href');
       if (!href) return;
@@ -524,14 +549,11 @@ async function extractDownloadLinks(movieUrl, targetYear = null) {
       const isHubCloud = isHubCloudLink(href);
 
       if (!isSid && !isHubCloud) return;
-
       if (links.some(item => item.url === href)) return;
 
-      // Extract quality from surrounding text
       let quality = 'Unknown Quality';
       let size = 'Unknown';
 
-      // Search up to 8 previous siblings for quality info
       let current = $(element).parent();
       for (let i = 0; i < 8; i++) {
         if (current.length === 0) break;
@@ -544,11 +566,9 @@ async function extractDownloadLinks(movieUrl, targetYear = null) {
         current = current.prev();
       }
 
-      // Size extraction
       const sizeMatch = quality.match(/\[([0-9.,]+\s*[KMGT]B[^\]]*)\]/i);
       if (sizeMatch) size = sizeMatch[1];
 
-      // Year filter
       if (targetYear && quality !== 'Unknown Quality') {
         const yearMatches = quality.match(/\b(19|20)\d{2}\b/g);
         if (yearMatches && yearMatches.length > 0) {
@@ -574,7 +594,7 @@ async function extractDownloadLinks(movieUrl, targetYear = null) {
   }
 }
 
-// Extract TV show links (UPDATED: supports HubCloud)
+// Extract TV show links (supports HubCloud)
 async function extractTvShowDownloadLinks(showPageUrl, targetSeason, targetEpisode) {
   try {
     console.log(`[UHDMovies] TV: ${showPageUrl} S${targetSeason}E${targetEpisode}`);
@@ -586,7 +606,6 @@ async function extractTvShowDownloadLinks(showPageUrl, targetSeason, targetEpiso
     let inTargetSeason = false;
     let qualityText = '';
 
-    // Search whole page for season markers + episode links
     $('.entry-content').find('*').each((index, element) => {
       const $el = $(element);
       const text = $el.text().trim();
@@ -605,7 +624,6 @@ async function extractTvShowDownloadLinks(showPageUrl, targetSeason, targetEpiso
 
       if (!inTargetSeason) return;
 
-      // Update quality header
       if ($el.is('pre, p:has(strong), p:has(b), h3, h4, div:has(strong)')) {
         const headerText = $el.text().trim();
         if (headerText.length > 10 && headerText.length < 500 &&
@@ -616,7 +634,6 @@ async function extractTvShowDownloadLinks(showPageUrl, targetSeason, targetEpiso
         }
       }
 
-      // Find episode links in this element
       const episodeRegex = new RegExp(`^Episode\\s+0*${targetEpisode}(?!\\d)`, 'i');
       $el.find('a[href]').each((i, a) => {
         const href = $(a).attr('href');
@@ -627,7 +644,6 @@ async function extractTvShowDownloadLinks(showPageUrl, targetSeason, targetEpiso
         if (!episodeRegex.test(linkText)) return;
         if (links.some(item => item.url === href)) return;
 
-        // Size
         const sizeMatch = qualityText.match(/\[([0-9.,]+\s*[KMGT]B)/i);
         const size = sizeMatch ? sizeMatch[1].replace(/[\[\]]/g, '').trim() : 'Unknown';
 
