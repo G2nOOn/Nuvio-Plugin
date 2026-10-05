@@ -1,3 +1,4 @@
+// UHD Movies Scraper - Final
 const cheerio = require('cheerio-without-node-native');
 
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
@@ -133,195 +134,145 @@ async function extractTvLinks(pageUrl, season, episode) {
   }
 }
 
-// NEW: Multi-step SID resolver - follows chain until driveseed/hubcloud/file
+// STRICT SID resolver - only follows exact buttons, skips blog posts
 async function resolveSid(sidUrl) {
-  try {
-    var currentUrl = sidUrl;
-    var referer = BASE_DOMAIN + '/';
+  var currentUrl = sidUrl;
+  var referer = BASE_DOMAIN + '/';
+  var currentHtml = null;
 
-    for (var step = 0; step < 10; step++) {
-      console.log('[SID] Step ' + step + ' URL: ' + currentUrl.substring(0, 120));
+  for (var step = 0; step < 15; step++) {
+    console.log('[SID] Step ' + step + ' URL: ' + currentUrl.substring(0, 100));
 
-      var resp = await makeRequest(currentUrl, { headers: { 'Referer': referer } });
-      var html = await resp.text();
-      console.log('[SID] HTML length: ' + html.length);
-
-      // 1. Check if we hit driveseed / driveleech
-      var driveMatch = html.match(/https?:\/\/[^"'\s<>]*drive(?:leech|seed)\.(?:net|org)[^"'\s<>]*/i);
-      if (driveMatch) {
-        console.log('[SID] Got driveseed: ' + driveMatch[0].substring(0, 100));
-        return driveMatch[0];
+    if (!currentHtml) {
+      try {
+        var resp = await makeRequest(currentUrl, { headers: { 'Referer': referer } });
+        currentHtml = await resp.text();
+      } catch (e) {
+        console.log('[SID] Fetch error: ' + e.message);
+        return null;
       }
+    }
 
-      // 2. Check for hubcloud
-      var hubMatch = html.match(/https?:\/\/[^"'\s<>]*hubcloud[^"'\s<>]*/i);
-      if (hubMatch) {
-        console.log('[SID] Got hubcloud: ' + hubMatch[0].substring(0, 100));
-        return hubMatch[0];
-      }
+    var html = currentHtml;
+    currentHtml = null;
+    console.log('[SID] HTML length: ' + html.length);
 
-      // 3. Check for direct file
-      var fileMatch = html.match(/https?:\/\/[^"'\s<>]*\.(?:mkv|mp4)[^"'\s<>]*/i);
-      if (fileMatch) {
-        console.log('[SID] Got file: ' + fileMatch[0].substring(0, 100));
-        return fileMatch[0];
-      }
+    // 1. Check for target URLs
+    var driveMatch = html.match(/https?:\/\/[^"'\s<>]*drive(?:leech|seed)\.(?:net|org)[^"'\s<>]*/i);
+    if (driveMatch) {
+      console.log('[SID] SUCCESS driveseed: ' + driveMatch[0].substring(0, 120));
+      return driveMatch[0];
+    }
 
-      // 4. Look for meta refresh
-      var metaMatch = html.match(/http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'\s<>"']+)/i);
-      if (metaMatch) {
-        var nextUrl = metaMatch[1].indexOf('http') === 0 ? metaMatch[1] : new URL(metaMatch[1], currentUrl).href;
-        console.log('[SID] Meta refresh -> ' + nextUrl.substring(0, 120));
-        referer = currentUrl;
-        currentUrl = nextUrl;
-        continue;
-      }
+    var hubMatch = html.match(/https?:\/\/[^"'\s<>]*hubcloud[^"'\s<>]*/i);
+    if (hubMatch) {
+      console.log('[SID] SUCCESS hubcloud: ' + hubMatch[0].substring(0, 120));
+      return hubMatch[0];
+    }
 
-      // 5. Look for form to submit
-      var $ = cheerio.load(html);
-      var form = $('form').first();
-      if (form.length > 0) {
-        var action = form.attr('action');
-        var method = (form.attr('method') || 'GET').toUpperCase();
+    var fileMatch = html.match(/https?:\/\/[^"'\s<>]*\.(?:mkv|mp4)(\?|$)[^"'\s<>]*/i);
+    if (fileMatch) {
+      console.log('[SID] SUCCESS file: ' + fileMatch[0].substring(0, 120));
+      return fileMatch[0];
+    }
 
-        if (action) {
-          var actionUrl = action.indexOf('http') === 0 ? action : new URL(action, currentUrl).href;
-          var formData = {};
-          form.find('input, button').each(function(i, inp) {
-            var name = $(inp).attr('name');
-            var value = $(inp).attr('value') || '';
-            var type = ($(inp).attr('type') || '').toLowerCase();
-            if (name && type !== 'submit' && type !== 'button') {
-              formData[name] = value;
-            }
-          });
+    // 2. Look for form
+    var $ = cheerio.load(html);
+    var form = $('form#landing').first();
+    if (form.length === 0) form = $('form').first();
 
-          if (method === 'POST') {
-            var body = '';
-            for (var k in formData) {
-              if (body) body += '&';
-              body += encodeURIComponent(k) + '=' + encodeURIComponent(formData[k]);
-            }
-            console.log('[SID] POST form -> ' + actionUrl.substring(0, 120));
-            var postResp = await fetch(actionUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': currentUrl,
-                'User-Agent': UA,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Origin': new URL(currentUrl).origin
-              },
-              body: body,
-              redirect: 'follow'
-            });
-            var postHtml = await postResp.text();
-            console.log('[SID] POST response: ' + postResp.status + ' len: ' + postHtml.length);
+    if (form.length > 0) {
+      var action = form.attr('action') || currentUrl;
+      var method = (form.attr('method') || 'POST').toUpperCase();
+      var actionUrl = action.indexOf('http') === 0 ? action : new URL(action, currentUrl).href;
 
-            // Check post response
-            var driveM = postHtml.match(/https?:\/\/[^"'\s<>]*drive(?:leech|seed)\.(?:net|org)[^"'\s<>]*/i);
-            if (driveM) return driveM[0];
-
-            var hubM = postHtml.match(/https?:\/\/[^"'\s<>]*hubcloud[^"'\s<>]*/i);
-            if (hubM) return hubM[0];
-
-            var fileM = postHtml.match(/https?:\/\/[^"'\s<>]*\.(?:mkv|mp4)[^"'\s<>]*/i);
-            if (fileM) return fileM[0];
-
-            // Look for meta refresh in post response
-            var metaM = postHtml.match(/http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'\s<>"']+)/i);
-            if (metaM) {
-              referer = postResp.url || currentUrl;
-              currentUrl = metaM[1].indexOf('http') === 0 ? metaM[1] : new URL(metaM[1], postResp.url).href;
-              continue;
-            }
-
-            // Look for JS redirect in post response
-            var jsM = postHtml.match(/(?:window\.location(?:\.href)?|location\.replace\s*\()\s*=?\s*["']([^"']+)["']/i);
-            if (jsM) {
-              referer = postResp.url || currentUrl;
-              currentUrl = jsM[1].indexOf('http') === 0 ? jsM[1] : new URL(jsM[1], postResp.url).href;
-              continue;
-            }
-
-            // Look for a "Continue"/"Generate"/"Go" link in post response
-            var $post = cheerio.load(postHtml);
-            var nextLink = null;
-            $post('a[href]').each(function(i, el) {
-              var text = $post(el).text().trim().toLowerCase();
-              var href = $post(el).attr('href');
-              if (!href || href === '#' || href === '/') return;
-              if (/continue|generate|go to|next|click here/i.test(text)) {
-                if (!nextLink) {
-                  nextLink = href.indexOf('http') === 0 ? href : new URL(href, postResp.url).href;
-                }
-              }
-            });
-
-            if (nextLink) {
-              console.log('[SID] Follow continue: ' + nextLink.substring(0, 120));
-              referer = postResp.url || currentUrl;
-              currentUrl = nextLink;
-              continue;
-            }
-
-            console.log('[SID] POST response not helpful, stopping');
-            return null;
-          } else {
-            // GET form
-            var query = '';
-            for (var k2 in formData) {
-              if (query) query += '&';
-              query += encodeURIComponent(k2) + '=' + encodeURIComponent(formData[k2]);
-            }
-            var nextUrl2 = query ? actionUrl + (actionUrl.indexOf('?') >= 0 ? '&' : '?') + query : actionUrl;
-            console.log('[SID] GET form -> ' + nextUrl2.substring(0, 120));
-            referer = currentUrl;
-            currentUrl = nextUrl2;
-            continue;
-          }
-        }
-      }
-
-      // 6. Look for "Continue"/"Generate" link in current HTML
-      var $html = cheerio.load(html);
-      var continueLink = null;
-      $html('a[href]').each(function(i, el) {
-        var text = $html(el).text().trim().toLowerCase();
-        var href = $html(el).attr('href');
-        if (!href || href === '#' || href === '/') return;
-        if (/continue|generate|go to|next|click here/i.test(text)) {
-          if (!continueLink) {
-            continueLink = href.indexOf('http') === 0 ? href : new URL(href, currentUrl).href;
-          }
+      var formData = {};
+      form.find('input').each(function(i, inp) {
+        var name = $(inp).attr('name');
+        var value = $(inp).attr('value') || '';
+        var type = ($(inp).attr('type') || '').toLowerCase();
+        if (name && type !== 'button' && type !== 'submit' && type !== 'image') {
+          formData[name] = value;
         }
       });
 
-      if (continueLink) {
-        console.log('[SID] Follow link: ' + continueLink.substring(0, 120));
-        referer = currentUrl;
-        currentUrl = continueLink;
-        continue;
+      var body = '';
+      for (var k in formData) {
+        if (body) body += '&';
+        body += encodeURIComponent(k) + '=' + encodeURIComponent(formData[k]);
       }
 
-      // 7. Look for JS redirect in current HTML
-      var jsM2 = html.match(/(?:window\.location(?:\.href)?|location\.replace\s*\()\s*=?\s*["']([^"']+)["']/i);
-      if (jsM2) {
-        referer = currentUrl;
-        currentUrl = jsM2[1].indexOf('http') === 0 ? jsM2[1] : new URL(jsM2[1], currentUrl).href;
-        continue;
-      }
+      console.log('[SID] Form fields: ' + Object.keys(formData).join(', '));
 
-      console.log('[SID] No next step found, stopping at step ' + step);
-      return null;
+      try {
+        if (method === 'POST') {
+          var postResp = await fetch(actionUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Referer': currentUrl,
+              'User-Agent': UA,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.5',
+              'Origin': new URL(currentUrl).origin
+            },
+            body: body,
+            redirect: 'follow'
+          });
+          currentHtml = await postResp.text();
+          referer = currentUrl;
+          currentUrl = postResp.url || currentUrl;
+          console.log('[SID] POST -> ' + postResp.status + ' len=' + currentHtml.length);
+        } else {
+          var getUrl = actionUrl + (actionUrl.indexOf('?') >= 0 ? '&' : '?') + body;
+          referer = currentUrl;
+          currentUrl = getUrl;
+        }
+        continue;
+      } catch (e) {
+        console.log('[SID] Form submit error: ' + e.message);
+        return null;
+      }
     }
 
-    return null;
-  } catch (e) {
-    console.log('[SID] Error: ' + e.message);
+    // 3. No form - look ONLY for exact button texts
+    var actionLink = null;
+    $('a').each(function(i, el) {
+      var text = $(el).text().trim();
+      var href = $(el).attr('href');
+      if (!href || href === '#' || href === '/') return;
+      var cleanText = text.replace(/\s+/g, ' ').trim();
+      if (/^(I'?m not a robot|Continue|Generate link|Generate|Go to download|Click here to continue|Next|Click here|Submit)$/i.test(cleanText)) {
+        if (/\/\d{4}\/|news|blog|article|post|future-of-work|jani|casual/i.test(href)) return;
+        if (!actionLink) {
+          actionLink = href.indexOf('http') === 0 ? href : new URL(href, currentUrl).href;
+        }
+      }
+    });
+
+    if (actionLink) {
+      console.log('[SID] Following button: ' + actionLink.substring(0, 120));
+      referer = currentUrl;
+      currentUrl = actionLink;
+      continue;
+    }
+
+    // 4. Look for meta refresh
+    var metaMatch = html.match(/http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'\s<>"']+)/i);
+    if (metaMatch) {
+      var nextUrl = metaMatch[1].indexOf('http') === 0 ? metaMatch[1] : new URL(metaMatch[1], currentUrl).href;
+      console.log('[SID] Meta refresh -> ' + nextUrl.substring(0, 120));
+      referer = currentUrl;
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    console.log('[SID] No next step found at step ' + step);
     return null;
   }
+
+  console.log('[SID] Max steps reached');
+  return null;
 }
 
 async function resolveDriveSeed(url, depth) {
