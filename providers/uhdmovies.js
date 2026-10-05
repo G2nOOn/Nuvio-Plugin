@@ -7,7 +7,7 @@ console.log('[UHDMovies] Using cheerio-without-node-native for DOM parsing');
 
 // Constants
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
-const FALLBACK_DOMAIN = 'https://uhdmovies.email';
+const FALLBACK_DOMAIN = 'https://uhdmovies.my';
 const DOMAIN_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
 
 // Global variables for domain caching
