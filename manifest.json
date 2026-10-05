@@ -45,7 +45,7 @@
       "id": "uhdmovies",
       "name": "UHDmovies",
       "description": "uhdmovies — krmz.onl | STRICT 1080p ONLY",
-      "version": "3.3",
+      "version": "0.1",
       "author": "LO",
       "supportedTypes": ["tv"],
       "filename": "providers/uhdmovies.js",
