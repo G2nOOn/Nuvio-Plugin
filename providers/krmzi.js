@@ -1,5 +1,5 @@
 /**
- * Krmizi / Qrmzi provider for Nuvio — Multi-Quality Edition
+ * Krmizi / Qrmzi provider for Nuvio — Multi-Quality + CDNPlus 1080p Edition
  * Version: 1.4.3
  */
 
@@ -7,7 +7,7 @@
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.4.2";
+var VERSION = "1.4.3";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -827,19 +827,24 @@ function parseHlsMaster(text, masterUrl) {
 
 function variantsFromEncodedMaster(masterUrl) {
   var value = String(masterUrl || "");
-  var match = value.match(/^(https?:\/\/[^?#]+\/)([^\/?#]+)_((?:,[a-z0-9]+)+),?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
+  var match = value.match(/^(https?:\/\/[^?#]+\/)([^\/?#]+?)(?:_((?:,[a-z0-9]+)+),?)?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
   if (!match) return [];
 
+  var baseUrl = match[1];
+  var fileId = match[2].replace(/_+$/, "");
+  var queryString = match[4] || "";
+
   var qualities = { l: "360p", n: "480p", h: "720p", x: "1080p" };
-  var codes = match[3].split(",");
+  var codesToTry = ["x", "h", "n", "l"];
+  
   var variants = [];
   var seen = {};
-  for (var i = 0; i < codes.length; i++) {
-    var code = String(codes[i] || "").toLowerCase();
+  for (var i = 0; i < codesToTry.length; i++) {
+    var code = codesToTry[i];
     if (!qualities[code] || seen[code]) continue;
     seen[code] = true;
     variants.push({
-      url: match[1] + match[2] + "_" + code + "/index-v1-a1.m3u8" + (match[4] || ""),
+      url: baseUrl + fileId + "_" + code + "/index-v1-a1.m3u8" + queryString,
       quality: qualities[code]
     });
   }
@@ -856,7 +861,7 @@ function isHlsPlaylistText(text) {
 
 function reliableHlsSource(url, referer, serverName) {
   var identity = String(url || "") + " " + String(referer || "") + " " + String(serverName || "");
-  return /cdnplus(?:\.space)?|dailymotion|dai\.ly|dmcdn|brqz\.online|vidspeed\.space|vidoba\.cyou|anafast\.cyou|mp4plus\.cyou|larhu\.website|cdnz\.quest/i.test(identity);
+  return /cdnplus(?:\.space|\.org)?|dailymotion|dai\.ly|dmcdn|brqz\.online|vidspeed\.space|vidoba\.cyou|anafast\.cyou|mp4plus\.cyou|larhu\.website|cdnz\.quest/i.test(identity);
 }
 
 function unescapePackedString(value) {
@@ -938,7 +943,7 @@ function mediaEntriesFromHtml(html) {
 }
 
 function supportedDirectEmbed(url) {
-  return /^https?:\/\/[^\/]*(?:cdnplus\.space|mp4plus\.cyou|anafast\.cyou|vidoba\.cyou|vidspeed\.space|larhu\.website|brqz\.online|cdnz\.quest)\//i.test(String(url || ""));
+  return /^https?:\/\/[^\/]*(?:cdnplus\.space|cdnplus\.org|mp4plus\.cyou|anafast\.cyou|vidoba\.cyou|vidspeed\.space|larhu\.website|brqz\.online|cdnz\.quest)\//i.test(String(url || ""));
 }
 
 function dailymotionId(url) {
@@ -979,6 +984,19 @@ function collectAnaServers(html, playerUrl) {
   return servers.slice(0, MAX_SERVERS);
 }
 
+function expandEncodedMaster(url, referer, serverName, streams, seenStreams) {
+  var encodedVariants = variantsFromEncodedMaster(url);
+  if (!encodedVariants.length) return Promise.resolve();
+  seenStreams[url] = true;
+  for (var i = 0; i < encodedVariants.length; i++) {
+    var v = encodedVariants[i];
+    if (seenStreams[v.url]) continue;
+    seenStreams[v.url] = true;
+    streams.push(streamObject(v.url, referer, v.quality, serverName));
+  }
+  return Promise.resolve();
+}
+
 function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   var url = entry && entry.url ? entry.url : "";
   if (!url || seenStreams[url]) return Promise.resolve();
@@ -993,20 +1011,25 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
     return Promise.resolve();
   }
 
-  var encodedVariants = variantsFromEncodedMaster(url);
-  if (encodedVariants.length) {
-    seenStreams[url] = true;
-    if (!reliableHlsSource(url, referer, serverName)) {
-      log("skip_unreliable", url);
-      return Promise.resolve();
-    }
-    for (var encodedIndex = 0; encodedIndex < encodedVariants.length; encodedIndex++) {
-      var encoded = encodedVariants[encodedIndex];
-      if (seenStreams[encoded.url]) continue;
-      seenStreams[encoded.url] = true;
-      streams.push(streamObject(encoded.url, referer, encoded.quality, serverName));
-    }
-    return Promise.resolve();
+  if (reliableHlsSource(url, referer, serverName) && isMasterPlaylistUrl(url)) {
+    return fetchTextInfo(
+      url, referer, originOf(referer),
+      "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*"
+    ).then(function (result) {
+      var variants = parseHlsMaster(result.html, url);
+      if (variants.length) {
+        seenStreams[url] = true;
+        for (var i = 0; i < variants.length; i++) {
+          if (seenStreams[variants[i].url]) continue;
+          seenStreams[variants[i].url] = true;
+          streams.push(streamObject(variants[i].url, referer, variants[i].quality, serverName));
+        }
+        return;
+      }
+      return expandEncodedMaster(url, referer, serverName, streams, seenStreams);
+    }).catch(function () {
+      return expandEncodedMaster(url, referer, serverName, streams, seenStreams);
+    });
   }
 
   if (!reliableHlsSource(url, referer, serverName)) {
@@ -1016,24 +1039,12 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   }
 
   return fetchTextInfo(
-    url,
-    referer,
-    originOf(referer),
+    url, referer, originOf(referer),
     "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*"
   ).then(function (result) {
-    var variants = parseHlsMaster(result.html, url);
-    if (!variants.length) {
-      if (declaredQuality && !isMasterPlaylistUrl(url) && isHlsPlaylistText(result.html) && !seenStreams[url]) {
-        seenStreams[url] = true;
-        streams.push(streamObject(url, referer, declaredQuality, serverName));
-      }
-      return;
-    }
-
-    for (var i = 0; i < variants.length; i++) {
-      if (seenStreams[variants[i].url]) continue;
-      seenStreams[variants[i].url] = true;
-      streams.push(streamObject(variants[i].url, referer, variants[i].quality, serverName));
+    if (declaredQuality && isHlsPlaylistText(result.html) && !seenStreams[url]) {
+      seenStreams[url] = true;
+      streams.push(streamObject(url, referer, declaredQuality, serverName));
     }
   }).catch(function () {});
 }
@@ -1068,6 +1079,47 @@ function resolveDailymotion(url, referer, serverName, streams, seenStreams) {
     }).catch(function () {});
 }
 
+function parseCdnPlusDownloadLinks(html, baseUrl) {
+  var $ = cheerio.load(html);
+  var links = [];
+  var seen = {};
+
+  $("a").each(function (_, element) {
+    var anchor = wrap($, element);
+    var href = absUrl(anchor.attr("href"), baseUrl);
+    var text = anchor.text().replace(/\s+/g, " ").trim();
+    if (!href || seen[href]) return;
+    if (!directMedia(href) && !/\.(?:mp4|m3u8)/i.test(href)) return;
+
+    var quality = qualityFromText(text) || qualityFromText(href);
+    seen[href] = true;
+    links.push({ url: href, quality: quality, label: text });
+  });
+
+  return links;
+}
+
+function resolveCdnPlusPage(url, referer, serverName, streams, seenStreams) {
+  return fetchTextInfo(url, referer, originOf(referer)).then(function (result) {
+    var links = parseCdnPlusDownloadLinks(result.html, result.url);
+    log("cdnplus_links", "count=" + links.length);
+    for (var i = 0; i < links.length; i++) {
+      log("cdnplus_link", links[i].quality + " " + links[i].url);
+    }
+    var jobs = [];
+    for (var j = 0; j < links.length; j++) {
+      jobs.push(addMediaEntry(
+        { url: links[j].url, quality: links[j].quality },
+        result.url,
+        serverName + " • " + (links[j].quality || "link"),
+        streams,
+        seenStreams
+      ));
+    }
+    return Promise.all(jobs);
+  }).catch(function () {});
+}
+
 function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoundaries) {
   if (!target || !target.url) return Promise.resolve();
   var url = target.url;
@@ -1080,7 +1132,26 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
   }
   if (!supportedDirectEmbed(url)) return Promise.resolve();
 
+  // If it's a CDNPlus page, handle it specially
+  if (/cdnplus\.org/i.test(url)) {
+    return resolveCdnPlusPage(url, target.referer, target.label, streams, seenStreams);
+  }
+
   return fetchTextInfo(url, target.referer, originOf(target.referer)).then(function (result) {
+    // Check if this page contains a link to cdnplus.org
+    var $ = cheerio.load(result.html);
+    var cdnLinks = [];
+    $("a[href*='cdnplus.org']").each(function (_, el) {
+      var href = absUrl($(el).attr("href"), result.url);
+      if (href) cdnLinks.push(href);
+    });
+
+    var cdnJobs = [];
+    for (var c = 0; c < cdnLinks.length; c++) {
+      log("found_cdnplus_link", cdnLinks[c]);
+      cdnJobs.push(resolveCdnPlusPage(cdnLinks[c], result.url, target.label, streams, seenStreams));
+    }
+
     var explicit = explicitSeasonEpisode(result.html + " " + result.url);
     if (explicit) {
       var boundaries = (externalBoundaries && externalBoundaries.length)
@@ -1093,11 +1164,11 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
 
       if (!seasonOk) {
         logFailure("player_identity_mismatch", target.label + " S" + explicit.season);
-        return;
+        return Promise.all(cdnJobs);
       }
       if (!episodeOk) {
         logFailure("player_identity_mismatch", target.label + " E" + explicit.episode);
-        return;
+        return Promise.all(cdnJobs);
       }
     }
 
@@ -1112,7 +1183,7 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
     for (var i = 0; i < entries.length; i++) {
       jobs.push(addMediaEntry(entries[i], result.url, target.label, streams, seenStreams));
     }
-    return Promise.all(jobs);
+    return Promise.all(cdnJobs.concat(jobs));
   }).catch(function () {});
 }
 
@@ -1297,7 +1368,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
       return resolvePlayer(verifiedEpisode, context.tmdbBoundaries);
     })
     .then(function (streams) {
-      // Accept all qualities — no 1080p filter
       var filtered = (streams || []);
       var sorted = sortStreams(filtered);
       if (!sorted.length) logFailure("no_sources");
