@@ -1,7 +1,7 @@
 /**
  * Krmizi / Qrmzi provider for Nuvio — STRICT 1080p ONLY Edition
  * Version: 1.4.1
-*/
+ */
 
 "use strict";
 
@@ -863,7 +863,8 @@ function isHlsPlaylistText(text) {
 
 function reliableHlsSource(url, referer, serverName) {
   var identity = String(url || "") + " " + String(referer || "") + " " + String(serverName || "");
-  return /cdnplus(?:\.space)?|dailymotion|dai\.ly|dmcdn|brqz\.online/i.test(identity);
+  // Added vidspeed.space and other common domains
+  return /cdnplus(?:\.space)?|dailymotion|dai\.ly|dmcdn|brqz\.online|vidspeed\.space|vidoba\.cyou|anafast\.cyou|mp4plus\.cyou|larhu\.website/i.test(identity);
 }
 
 function unescapePackedString(value) {
@@ -991,7 +992,11 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   if (!url || seenStreams[url]) return Promise.resolve();
   var declaredQuality = entry.quality || qualityFromText(serverName) || qualityFromText(url);
 
+  // Debug logging
+  log("media_entry", "url=" + url + " q=" + (declaredQuality || "none") + " server=" + serverName);
+
   if (declaredQuality && declaredQuality !== "1080p") {
+    log("skip_quality", declaredQuality);
     return Promise.resolve();
   }
 
@@ -1005,7 +1010,10 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   var encodedVariants = variantsFromEncodedMaster(url);
   if (encodedVariants.length) {
     seenStreams[url] = true;
-    if (!reliableHlsSource(url, referer, serverName)) return Promise.resolve();
+    if (!reliableHlsSource(url, referer, serverName)) {
+      log("skip_unreliable", url);
+      return Promise.resolve();
+    }
     for (var encodedIndex = 0; encodedIndex < encodedVariants.length; encodedIndex++) {
       var encoded = encodedVariants[encodedIndex];
       if (seenStreams[encoded.url]) continue;
@@ -1016,6 +1024,7 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   }
 
   if (!reliableHlsSource(url, referer, serverName)) {
+    log("skip_unreliable", url);
     seenStreams[url] = true;
     return Promise.resolve();
   }
@@ -1106,7 +1115,15 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
         return;
       }
     }
+
+    // Debug: log HTML length and entries found
+    log("embed_html", result.url + " len=" + result.html.length);
     var entries = mediaEntriesFromHtml(result.html);
+    log("embed_entries", "count=" + entries.length);
+    for (var d = 0; d < entries.length; d++) {
+      log("embed_entry", entries[d].url + " q=" + entries[d].quality);
+    }
+
     var jobs = [];
     for (var i = 0; i < entries.length; i++) {
       jobs.push(addMediaEntry(entries[i], result.url, target.label, streams, seenStreams));
@@ -1296,11 +1313,10 @@ function getStreams(tmdbId, mediaType, season, episode) {
       return resolvePlayer(verifiedEpisode, context.tmdbBoundaries);
     })
     .then(function (streams) {
-      var filtered = (streams || []).filter(function (s) {
-        return (s.quality || "") === "1080p";
-      });
+      // Temporarily accept all qualities for debugging
+      var filtered = (streams || []);
       var sorted = sortStreams(filtered);
-      if (!sorted.length) logFailure("no_1080p_sources");
+      if (!sorted.length) logFailure("no_sources");
       for (var i = 0; i < sorted.length; i++) {
         log("quality", sorted[i].quality || "unannounced");
       }
