@@ -58,7 +58,7 @@
       "id": "krmzi",
       "name": "Krmzi",
       "description": "Krmzi Turkish series - STRICT 1080p ONLY",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "author": "He",
       "supportedTypes": ["tv"],
       "filename": "providers/krmzi.js",
