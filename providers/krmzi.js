@@ -1,13 +1,13 @@
 /**
- * Krmizi / Qrmzi provider for Nuvio — STRICT 1080p ONLY Edition
- * Version: 1.4.1
+ * Krmizi / Qrmzi provider for Nuvio — Multi-Quality Edition
+ * Version: 1.4.3
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.4.1";
+var VERSION = "1.4.2";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
@@ -289,9 +289,6 @@ function findSeasonBoundaries(seriesHtml) {
   return boundaries;
 }
 
-/**
- * v1.4.0 — Fetch season boundaries from TMDB API.
- */
 function getTmdbSeasonBoundaries(tmdbId) {
   var cacheKey = String(tmdbId);
   if (seasonBoundariesCache[cacheKey]) {
@@ -560,9 +557,6 @@ function resolveSeries(metadata) {
   return nextBase();
 }
 
-/**
- * v1.4.0 — findExactEpisode now accepts external (TMDB) boundaries.
- */
 function findExactEpisode(series, wantedSeason, wantedEpisode, externalBoundaries) {
   if (wantedSeason < 1 || wantedEpisode < 1) {
     logFailure("invalid_season_or_episode", "S" + wantedSeason + "E" + wantedEpisode);
@@ -842,7 +836,6 @@ function variantsFromEncodedMaster(masterUrl) {
   var seen = {};
   for (var i = 0; i < codes.length; i++) {
     var code = String(codes[i] || "").toLowerCase();
-    if (code !== "x") continue;
     if (!qualities[code] || seen[code]) continue;
     seen[code] = true;
     variants.push({
@@ -863,8 +856,7 @@ function isHlsPlaylistText(text) {
 
 function reliableHlsSource(url, referer, serverName) {
   var identity = String(url || "") + " " + String(referer || "") + " " + String(serverName || "");
-  // Added vidspeed.space and other common domains
-  return /cdnplus(?:\.space)?|dailymotion|dai\.ly|dmcdn|brqz\.online|vidspeed\.space|vidoba\.cyou|anafast\.cyou|mp4plus\.cyou|larhu\.website/i.test(identity);
+  return /cdnplus(?:\.space)?|dailymotion|dai\.ly|dmcdn|brqz\.online|vidspeed\.space|vidoba\.cyou|anafast\.cyou|mp4plus\.cyou|larhu\.website|cdnz\.quest/i.test(identity);
 }
 
 function unescapePackedString(value) {
@@ -946,7 +938,7 @@ function mediaEntriesFromHtml(html) {
 }
 
 function supportedDirectEmbed(url) {
-  return /^https?:\/\/[^\/]*(?:cdnplus\.space|mp4plus\.cyou|anafast\.cyou|vidoba\.cyou|vidspeed\.space|larhu\.website|brqz\.online)\//i.test(String(url || ""));
+  return /^https?:\/\/[^\/]*(?:cdnplus\.space|mp4plus\.cyou|anafast\.cyou|vidoba\.cyou|vidspeed\.space|larhu\.website|brqz\.online|cdnz\.quest)\//i.test(String(url || ""));
 }
 
 function dailymotionId(url) {
@@ -992,13 +984,7 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   if (!url || seenStreams[url]) return Promise.resolve();
   var declaredQuality = entry.quality || qualityFromText(serverName) || qualityFromText(url);
 
-  // Debug logging
   log("media_entry", "url=" + url + " q=" + (declaredQuality || "none") + " server=" + serverName);
-
-  if (declaredQuality && declaredQuality !== "1080p") {
-    log("skip_quality", declaredQuality);
-    return Promise.resolve();
-  }
 
   if (!/\.m3u8(?:[?#]|$)/i.test(url)) {
     if (!declaredQuality) return Promise.resolve();
@@ -1045,7 +1031,7 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
     }
 
     for (var i = 0; i < variants.length; i++) {
-      if (variants[i].quality !== "1080p" || seenStreams[variants[i].url]) continue;
+      if (seenStreams[variants[i].url]) continue;
       seenStreams[variants[i].url] = true;
       streams.push(streamObject(variants[i].url, referer, variants[i].quality, serverName));
     }
@@ -1066,7 +1052,6 @@ function resolveDailymotion(url, referer, serverName, streams, seenStreams) {
         for (var j = 0; j < list.length; j++) {
           if (!list[j] || !list[j].url) continue;
           var q = qualityFromText(keys[i]);
-          if (q !== "1080p") continue;
           jobs.push(addMediaEntry(
             { url: list[j].url, quality: q },
             url,
@@ -1116,7 +1101,6 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
       }
     }
 
-    // Debug: log HTML length and entries found
     log("embed_html", result.url + " len=" + result.html.length);
     var entries = mediaEntriesFromHtml(result.html);
     log("embed_entries", "count=" + entries.length);
@@ -1313,7 +1297,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       return resolvePlayer(verifiedEpisode, context.tmdbBoundaries);
     })
     .then(function (streams) {
-      // Temporarily accept all qualities for debugging
+      // Accept all qualities — no 1080p filter
       var filtered = (streams || []);
       var sorted = sortStreams(filtered);
       if (!sorted.length) logFailure("no_sources");
