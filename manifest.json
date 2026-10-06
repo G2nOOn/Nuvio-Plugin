@@ -71,7 +71,7 @@
       "id": "4khdhub",
       "name": "4KHDHub",
       "description": "4KHDHub - Movies & series via 4khdhub.one - STRICT 1080p ONLY (largest file priority)",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "author": "He",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/4khdhub.js",
