@@ -1,27 +1,24 @@
 /**
- * Krmizi / Qrmzi provider for Nuvio — VidSpeed Only Edition
- * Version: 1.4.6
- */
+ * Krmizi / Qrmzi provider for Nuvio — All Qualities Edition
+ * Version: 1.4.2
+*/
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.4.6";
+var VERSION = "1.4.2";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
 var SITE_BASES = [
   "https://www.qrmzi.tv",
-  "https://krmzi.live",
+  "https://krmizi.onl",
   "https://v2.qrmzi.website"
 ];
 var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 var MAX_SERIES_PROBES = 6;
 var MAX_SERVERS = 8;
-
-// فلتر السيرفر المفضل — اتركه فارغ "" عشان يقبل كل السيرفرات
-var PREFERRED_SERVER = "vidspeed";
 
 var seasonBoundariesCache = {};
 
@@ -540,19 +537,15 @@ function resolveSeries(metadata) {
     if (baseIndex >= SITE_BASES.length) return Promise.resolve(null);
     var base = SITE_BASES[baseIndex++];
     var indexUrl = base + "/all-turkish-series/";
-    log("trying_base", base);
 
     return fetchTextInfo(indexUrl, base + "/", "").then(function (result) {
-      log("base_ok", base + " len=" + result.html.length);
       var cards = parseSeriesCards(result.html, result.url, metadata.titles);
-      log("base_cards", cards.length);
       if (!cards.length) return nextBase();
       return verifyRankedCards(cards, metadata.titles, result.url).then(function (series) {
         if (series) return series;
         return nextBase();
       });
     }).catch(function (error) {
-      logFailure("base_failed", base + " " + errorMessage(error));
       if (errorMessage(error).indexOf("cloudflare_challenge") === 0) {
         logFailure("cloudflare_challenge", originOf(indexUrl));
       }
@@ -833,24 +826,19 @@ function parseHlsMaster(text, masterUrl) {
 
 function variantsFromEncodedMaster(masterUrl) {
   var value = String(masterUrl || "");
-  var match = value.match(/^(https?:\/\/[^?#]+\/)([^\/?#]+?)(?:_((?:,[a-z0-9]+)+),?)?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
+  var match = value.match(/^(https?:\/\/[^?#]+\/)([^\/?#]+)_((?:,[a-z0-9]+)+),?\.urlset\/master\.m3u8(\?[^#]*)?$/i);
   if (!match) return [];
 
-  var baseUrl = match[1];
-  var fileId = match[2].replace(/_+$/, "");
-  var queryString = match[4] || "";
-
   var qualities = { l: "360p", n: "480p", h: "720p", x: "1080p" };
-  var codesToTry = ["x", "h", "n", "l"];
-  
+  var codes = match[3].split(",");
   var variants = [];
   var seen = {};
-  for (var i = 0; i < codesToTry.length; i++) {
-    var code = codesToTry[i];
+  for (var i = 0; i < codes.length; i++) {
+    var code = String(codes[i] || "").toLowerCase();
     if (!qualities[code] || seen[code]) continue;
     seen[code] = true;
     variants.push({
-      url: baseUrl + fileId + "_" + code + "/index-v1-a1.m3u8" + queryString,
+      url: match[1] + match[2] + "_" + code + "/index-v1-a1.m3u8" + (match[4] || ""),
       quality: qualities[code]
     });
   }
@@ -980,38 +968,20 @@ function collectAnaServers(html, playerUrl) {
     if (!url || originOf(url) !== playerOrigin || pathKey(url) !== playerPath || seen[url]) return;
     var servMatch = url.match(/[?&]serv=(\d+)/i);
     if (!servMatch) return;
-    var label = (anchor.text() || "Server " + servMatch[1]).replace(/\s+/g, " ").trim();
-    // فلتر السيرفر المفضل — إذا PREFERRED_SERVER غير فارغ، نقبل فقط السيرفرات اللي تحتوي عليه
-    if (PREFERRED_SERVER && label.toLowerCase().indexOf(PREFERRED_SERVER) < 0) {
-      log("skip_server", label);
-      return;
-    }
     seen[url] = true;
-    servers.push({ url: url, label: label });
+    servers.push({
+      url: url,
+      label: (anchor.text() || "Server " + servMatch[1]).replace(/\s+/g, " ").trim()
+    });
   });
 
   return servers.slice(0, MAX_SERVERS);
-}
-
-function expandEncodedMaster(url, referer, serverName, streams, seenStreams) {
-  var encodedVariants = variantsFromEncodedMaster(url);
-  if (!encodedVariants.length) return Promise.resolve();
-  seenStreams[url] = true;
-  for (var i = 0; i < encodedVariants.length; i++) {
-    var v = encodedVariants[i];
-    if (seenStreams[v.url]) continue;
-    seenStreams[v.url] = true;
-    streams.push(streamObject(v.url, referer, v.quality, serverName));
-  }
-  return Promise.resolve();
 }
 
 function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
   var url = entry && entry.url ? entry.url : "";
   if (!url || seenStreams[url]) return Promise.resolve();
   var declaredQuality = entry.quality || qualityFromText(serverName) || qualityFromText(url);
-
-  log("media_entry", "url=" + url + " q=" + (declaredQuality || "none") + " server=" + serverName);
 
   if (!/\.m3u8(?:[?#]|$)/i.test(url)) {
     if (!declaredQuality) return Promise.resolve();
@@ -1020,40 +990,43 @@ function addMediaEntry(entry, referer, serverName, streams, seenStreams) {
     return Promise.resolve();
   }
 
-  if (reliableHlsSource(url, referer, serverName) && isMasterPlaylistUrl(url)) {
-    return fetchTextInfo(
-      url, referer, originOf(referer),
-      "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*"
-    ).then(function (result) {
-      var variants = parseHlsMaster(result.html, url);
-      if (variants.length) {
-        seenStreams[url] = true;
-        for (var i = 0; i < variants.length; i++) {
-          if (seenStreams[variants[i].url]) continue;
-          seenStreams[variants[i].url] = true;
-          streams.push(streamObject(variants[i].url, referer, variants[i].quality, serverName));
-        }
-        return;
-      }
-      return expandEncodedMaster(url, referer, serverName, streams, seenStreams);
-    }).catch(function () {
-      return expandEncodedMaster(url, referer, serverName, streams, seenStreams);
-    });
+  var encodedVariants = variantsFromEncodedMaster(url);
+  if (encodedVariants.length) {
+    seenStreams[url] = true;
+    if (!reliableHlsSource(url, referer, serverName)) return Promise.resolve();
+    for (var encodedIndex = 0; encodedIndex < encodedVariants.length; encodedIndex++) {
+      var encoded = encodedVariants[encodedIndex];
+      if (seenStreams[encoded.url]) continue;
+      seenStreams[encoded.url] = true;
+      streams.push(streamObject(encoded.url, referer, encoded.quality, serverName));
+    }
+    return Promise.resolve();
   }
 
   if (!reliableHlsSource(url, referer, serverName)) {
-    log("skip_unreliable", url);
     seenStreams[url] = true;
     return Promise.resolve();
   }
 
   return fetchTextInfo(
-    url, referer, originOf(referer),
+    url,
+    referer,
+    originOf(referer),
     "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*"
   ).then(function (result) {
-    if (declaredQuality && isHlsPlaylistText(result.html) && !seenStreams[url]) {
-      seenStreams[url] = true;
-      streams.push(streamObject(url, referer, declaredQuality, serverName));
+    var variants = parseHlsMaster(result.html, url);
+    if (!variants.length) {
+      if (declaredQuality && !isMasterPlaylistUrl(url) && isHlsPlaylistText(result.html) && !seenStreams[url]) {
+        seenStreams[url] = true;
+        streams.push(streamObject(url, referer, declaredQuality, serverName));
+      }
+      return;
+    }
+
+    for (var i = 0; i < variants.length; i++) {
+      if (seenStreams[variants[i].url]) continue;
+      seenStreams[variants[i].url] = true;
+      streams.push(streamObject(variants[i].url, referer, variants[i].quality, serverName));
     }
   }).catch(function () {});
 }
@@ -1120,14 +1093,7 @@ function resolveEmbedTarget(target, expected, streams, seenStreams, externalBoun
         return;
       }
     }
-
-    log("embed_html", result.url + " len=" + result.html.length);
     var entries = mediaEntriesFromHtml(result.html);
-    log("embed_entries", "count=" + entries.length);
-    for (var d = 0; d < entries.length; d++) {
-      log("embed_entry", entries[d].url + " q=" + entries[d].quality);
-    }
-
     var jobs = [];
     for (var i = 0; i < entries.length; i++) {
       jobs.push(addMediaEntry(entries[i], result.url, target.label, streams, seenStreams));
