@@ -1,24 +1,27 @@
 /**
- * Krmizi / Qrmzi provider for Nuvio — Multi-Site Test Edition
- * Version: 1.4.3
+ * Krmizi / Qrmzi provider for Nuvio — VidSpeed Only Edition
+ * Version: 1.4.6
  */
 
 "use strict";
 
 var cheerio = require("cheerio-without-node-native");
 
-var VERSION = "1.4.3";
+var VERSION = "1.4.6";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 var TMDB_BASE = "https://www.themoviedb.org";
 var SITE_BASES = [
+  "https://www.qrmzi.tv",
   "https://krmzi.live",
-  "https://v2.qrmzi.website",
-  "https://www.qrmzi.tv"
+  "https://v2.qrmzi.website"
 ];
 var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 var MAX_SERIES_PROBES = 6;
 var MAX_SERVERS = 8;
+
+// فلتر السيرفر المفضل — اتركه فارغ "" عشان يقبل كل السيرفرات
+var PREFERRED_SERVER = "vidspeed";
 
 var seasonBoundariesCache = {};
 
@@ -977,11 +980,14 @@ function collectAnaServers(html, playerUrl) {
     if (!url || originOf(url) !== playerOrigin || pathKey(url) !== playerPath || seen[url]) return;
     var servMatch = url.match(/[?&]serv=(\d+)/i);
     if (!servMatch) return;
+    var label = (anchor.text() || "Server " + servMatch[1]).replace(/\s+/g, " ").trim();
+    // فلتر السيرفر المفضل — إذا PREFERRED_SERVER غير فارغ، نقبل فقط السيرفرات اللي تحتوي عليه
+    if (PREFERRED_SERVER && label.toLowerCase().indexOf(PREFERRED_SERVER) < 0) {
+      log("skip_server", label);
+      return;
+    }
     seen[url] = true;
-    servers.push({
-      url: url,
-      label: (anchor.text() || "Server " + servMatch[1]).replace(/\s+/g, " ").trim()
-    });
+    servers.push({ url: url, label: label });
   });
 
   return servers.slice(0, MAX_SERVERS);
