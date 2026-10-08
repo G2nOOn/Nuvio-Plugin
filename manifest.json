@@ -48,7 +48,7 @@
       "version": "0.1",
       "author": "G2nOOn",
       "supportedTypes": ["tv"],
-      "filename": "providers/uhdmovies.js",
+      "filename": "providers/multishows.js",
       "enabled": true,
       "formats": ["m3u8"],
       "logo": "https://krmz.onl/favicon.ico",
