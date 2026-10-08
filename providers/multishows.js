@@ -1,6 +1,6 @@
 // ═════════════════════════════════════════════════════════════════════════════
-// Multishows Scraper for Nuvio (Log-Fixed & Title-Aware)
-// Logic: Fetches actual title from Cinemeta first, then searches multishows.top correctly.
+// Multishows/UHDMovies Scraper for Nuvio (Log-Fixed v3 - TMDB Based)
+// Logic: Uses TMDB API directly to get title, then searches multishows.top
 // ═════════════════════════════════════════════════════════════════════════════
 
 var __async = (__this, __arguments, generator) => {
@@ -19,12 +19,12 @@ function safeFetch(url, options) {
     ...options,
     headers: { 
       "User-Agent": UA, 
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", 
+      "Accept": "application/json, text/html, */*;q=0.8", 
       ... (options ? options.headers : {}) 
     },
     timeout: 15000
   }).catch(e => { 
-    console.log("[Multishows] Fetch Error: " + e.message); 
+    console.log("[UHDMovies] Fetch Error: " + e.message); 
     return null; 
   });
 }
@@ -65,42 +65,59 @@ function extractServerInfo(text) {
 function getStreams(tmdbId, mediaType, season, episode) {
   return __async(this, null, function* () {
     var t0 = Date.now();
-    var type = mediaType === "movie" ? "movie" : "series";
+    var type = mediaType === "movie" ? "movie" : "tv";
     
-    console.log("[Multishows] === START " + type + "/" + tmdbId + " ===");
+    console.log("[UHDMovies] === START " + type + "/" + tmdbId + " ===");
     
     try {
-      // 1. جلب اسم العمل من Cinemeta (Stremio) لاستخدامه في البحث بدقة
-      var metaUrl = "https://v3-cinemeta.strem.io/meta/" + type + "/" + tmdbId + ".json";
+      // 1. جلب الاسم من TMDB API مباشرة (لأن السجلات تثبت أنه يعمل)
+      var metaUrl = "https://api.themoviedb.org/3/" + type + "/" + tmdbId;
       var metaRes = yield safeFetch(metaUrl);
       var title = "";
       
       if (metaRes && metaRes.ok) {
         var metaData = yield metaRes.json();
-        if (metaData && metaData.meta && metaData.meta.name) {
-          title = metaData.meta.name;
-          console.log("[Multishows] Found title: " + title);
+        if (metaData) {
+          title = metaData.name || metaData.original_name || metaData.title || metaData.original_title || "";
+          console.log("[UHDMovies] Found title from TMDB: " + title);
+        }
+      }
+      
+      // 2. إذا فشل TMDB API، نجرب جلب الاسم من صفحة TMDB HTML
+      if (!title) {
+        console.log("[UHDMovies] TMDB API failed, trying HTML fallback...");
+        var htmlUrl = "https://www.themoviedb.org/" + type + "/" + tmdbId;
+        var htmlRes = yield safeFetch(htmlUrl);
+        
+        if (htmlRes && htmlRes.ok) {
+          var htmlText = yield htmlRes.text();
+          // استخراج الاسم من <title> tag
+          var titleMatch = htmlText.match(/<title>([^<]+?)\s*[-–—|]/i);
+          if (titleMatch && titleMatch[1]) {
+            title = titleMatch[1].trim();
+            console.log("[UHDMovies] Found title from HTML: " + title);
+          }
         }
       }
       
       if (!title) {
-        console.log("[Multishows] Could not fetch title, aborting.");
+        console.log("[UHDMovies] Could not fetch title, aborting.");
         return [];
       }
 
-      // 2. البحث في الموقع باستخدام الاسم (وليس TMDB ID)
+      // 3. البحث في multishows.top باستخدام الاسم الحقيقي
       var searchUrl = "https://multishows.top/?s=" + encodeURIComponent(title);
       var response = yield safeFetch(searchUrl);
       
       // إذا فشل النمط الأول، نجرب نمط البحث البديل
       if (!response || !response.ok) {
-        console.log("[Multishows] Primary search failed, trying fallback...");
+        console.log("[UHDMovies] Primary search failed, trying fallback...");
         searchUrl = "https://multishows.top/search/" + encodeURIComponent(title);
         response = yield safeFetch(searchUrl);
       }
       
       if (!response || !response.ok) {
-        console.log("[Multishows] All search attempts failed. Status: " + (response ? response.status : "No Response"));
+        console.log("[UHDMovies] All search attempts failed. Status: " + (response ? response.status : "No Response"));
         return [];
       }
       
@@ -108,7 +125,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var streams = [];
       var seen = {};
 
-      // 3. استخراج الروابط مع السياق المحيط (500 حرف)
+      // 4. استخراج الروابط مع السياق المحيط
       var linkRegex = /<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
       var match;
       
@@ -132,7 +149,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
         if (!serverInfo.quality && is4K) serverInfo.quality = "4K";
         if (!serverInfo.quality && is1080) serverInfo.quality = "1080P";
 
-        var nameParts = ["Multishows"];
+        var nameParts = ["UHDMovies"];
         if (serverInfo.source) nameParts.push(serverInfo.source);
         nameParts.push(serverInfo.quality || (is4K ? "4K" : "1080P"));
         
@@ -164,7 +181,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
         }
       }
 
-      // 4. ترتيب النتائج: 4K أولاً، ثم 1080p، ثم الأكبر حجماً
+      // 5. ترتيب النتائج
       streams.sort(function(a, b) {
         var qa = String(a.quality || "").toUpperCase();
         var qb = String(b.quality || "").toUpperCase();
@@ -180,11 +197,11 @@ function getStreams(tmdbId, mediaType, season, episode) {
         return s;
       });
 
-      console.log("[Multishows] === SUCCESS: Found " + streams.length + " streams in " + (Date.now() - t0) + "ms ===");
+      console.log("[UHDMovies] === SUCCESS: Found " + streams.length + " streams in " + (Date.now() - t0) + "ms ===");
       return streams;
       
     } catch (error) {
-      console.log("[Multishows] FATAL Error: " + error.message);
+      console.log("[UHDMovies] FATAL Error: " + error.message);
       return [];
     }
   });
