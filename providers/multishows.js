@@ -1,6 +1,5 @@
 // ═════════════════════════════════════════════════════════════════════════════
-// Multishows/UHDMovies Scraper for Nuvio (Final Complete Version with Accurate Matching)
-// Logic: TMDB API + multishows.top search + Accurate title matching + Download Link Resolver
+// Multishows/UHDMovies Scraper for Nuvio (Enhanced Debugging + Strict Matching)
 // ═════════════════════════════════════════════════════════════════════════════
 
 var __async = (__this, __arguments, generator) => {
@@ -16,6 +15,7 @@ var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
 function safeFetch(url, options) {
+  console.log("[UHDMovies] Fetching: " + url);
   return fetch(url, {
     ...options,
     headers: { 
@@ -24,8 +24,11 @@ function safeFetch(url, options) {
       ... (options ? options.headers : {}) 
     },
     timeout: 15000
+  }).then(response => {
+    console.log("[UHDMovies] Response: " + response.status + " for " + url);
+    return response;
   }).catch(e => { 
-    console.log("[UHDMovies] Fetch Error: " + e.message); 
+    console.log("[UHDMovies] Fetch Error: " + e.message + " for " + url); 
     return null; 
   });
 }
@@ -81,57 +84,42 @@ function resolveDownloadLink(downloadUrl) {
       var html = yield response.text();
       var directUrl = null;
       
-      // 1. HubCloud
       if (downloadUrl.includes('hubcloud') || downloadUrl.includes('gamerxyt')) {
         var match = html.match(/file_url['"]?\s*:\s*['"]([^'"]+)['"]/);
-        if (match) {
-          directUrl = match[1];
-        } else {
+        if (match) directUrl = match[1];
+        else {
           match = html.match(/<iframe[^>]+src=['"]([^'"]+)['"]/);
           if (match) directUrl = match[1];
         }
       }
-      
-      // 2. Streamtape
       else if (downloadUrl.includes('streamtape')) {
         var match = html.match(/getElementById\(['"]videolink['"]\)[^>]*>([^<]+)/);
-        if (match) {
-          directUrl = "https://streamtape.com/get_video?" + match[1];
-        } else {
+        if (match) directUrl = "https://streamtape.com/get_video?" + match[1];
+        else {
           match = html.match(/id=['"]videolink['"][^>]*>([^<]+)/);
           if (match) directUrl = "https://streamtape.com/get_video?" + match[1];
         }
       }
-      
-      // 3. Vidmoly
       else if (downloadUrl.includes('vidmoly')) {
         var match = html.match(/sources:\s*\[\{file:\s*['"]([^'"]+)['"]/);
-        if (match) {
-          directUrl = match[1];
-        } else {
+        if (match) directUrl = match[1];
+        else {
           match = html.match(/file:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/);
           if (match) directUrl = match[1];
         }
       }
-      
-      // 4. Earnvids
       else if (downloadUrl.includes('earnvids')) {
         var match = html.match(/file_url['"]?\s*:\s*['"]([^'"]+)['"]/);
         if (match) directUrl = match[1];
       }
-      
-      // 5. StreamHG
       else if (downloadUrl.includes('streamhg')) {
         var match = html.match(/sources:\s*\[\{file:\s*['"]([^'"]+)['"]/);
         if (match) directUrl = match[1];
       }
-      
-      // 6. Abyss أو روابط مباشرة
       else if (downloadUrl.includes('abyss') || downloadUrl.includes('.mp4') || downloadUrl.includes('.m3u8')) {
         directUrl = downloadUrl;
       }
       
-      // 7. محاولة عامة: البحث عن أي رابط فيديو
       if (!directUrl) {
         var match = html.match(/(https?:\/\/[^\s"']+\.mp4[^\s"']*)/);
         if (match) directUrl = match[1];
@@ -158,13 +146,13 @@ function resolveDownloadLink(downloadUrl) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// دالة مساعدة للتحقق من تطابق الأسماء
+// دالة مساعدة للتحقق من تطابق الأسماء (أكثر صرامة)
 // ═════════════════════════════════════════════════════════════════════════════
 
 function normalizeTitle(title) {
   return title.toLowerCase()
-    .replace(/[^\w\s]/g, '') // إزالة الرموز
-    .replace(/\s+/g, ' ') // توحيد المسافات
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -172,12 +160,26 @@ function titleMatches(searchTitle, candidateTitle) {
   var normalizedSearch = normalizeTitle(searchTitle);
   var normalizedCandidate = normalizeTitle(candidateTitle);
   
-  // التحقق من التطابق المباشر
-  if (normalizedCandidate.includes(normalizedSearch) || normalizedSearch.includes(normalizedCandidate)) {
+  console.log("[UHDMovies] Comparing: '" + normalizedSearch + "' vs '" + normalizedCandidate + "'");
+  
+  // التحقق من التطابق المباشر (الأكثر صرامة)
+  if (normalizedSearch === normalizedCandidate) {
+    console.log("[UHDMovies] ✓ Exact match!");
     return true;
   }
   
-  // التحقق من التطابق الجزئي (على الأقل 70% من الكلمات)
+  // التحقق من أن أحدهما يحتوي على الآخر بالكامل
+  if (normalizedCandidate.includes(normalizedSearch) || normalizedSearch.includes(normalizedCandidate)) {
+    // ولكن يجب أن يكون الطول متقارباً (ليس جزء صغير فقط)
+    var lengthRatio = Math.min(normalizedSearch.length, normalizedCandidate.length) / 
+                      Math.max(normalizedSearch.length, normalizedCandidate.length);
+    if (lengthRatio >= 0.8) {
+      console.log("[UHDMovies] ✓ Contains match (ratio: " + lengthRatio.toFixed(2) + ")");
+      return true;
+    }
+  }
+  
+  // التحقق من التطابق الجزئي (على الأقل 90% من الكلمات)
   var searchWords = normalizedSearch.split(' ').filter(w => w.length > 2);
   var candidateWords = normalizedCandidate.split(' ').filter(w => w.length > 2);
   
@@ -187,14 +189,19 @@ function titleMatches(searchTitle, candidateTitle) {
   for (var i = 0; i < searchWords.length; i++) {
     var word = searchWords[i];
     for (var j = 0; j < candidateWords.length; j++) {
-      if (candidateWords[j].includes(word) || word.includes(candidateWords[j])) {
+      if (candidateWords[j] === word || 
+          (candidateWords[j].length >= word.length && candidateWords[j].includes(word)) ||
+          (word.length >= candidateWords[j].length && word.includes(candidateWords[j]))) {
         matchCount++;
         break;
       }
     }
   }
   
-  return matchCount / searchWords.length >= 0.7;
+  var matchRatio = matchCount / searchWords.length;
+  console.log("[UHDMovies] Word match: " + matchCount + "/" + searchWords.length + " = " + matchRatio.toFixed(2));
+  
+  return matchRatio >= 0.9; // أكثر صرامة: 90% بدلاً من 70%
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -206,91 +213,124 @@ function getStreams(tmdbId, mediaType, season, episode) {
     var t0 = Date.now();
     var type = mediaType === "movie" ? "movie" : "tv";
     
-    console.log("[UHDMovies] === START " + type + "/" + tmdbId + " ===");
+    console.log("[UHDMovies] ═══════════════════════════════════════════════════");
+    console.log("[UHDMovies] === START " + type + "/" + tmdbId + " S" + season + "E" + episode + " ===");
+    console.log("[UHDMovies] ═══════════════════════════════════════════════════");
     
     try {
       var title = "";
       
       // 1. جلب الاسم من TMDB API
+      console.log("[UHDMovies] Step 1: Fetching title from TMDB API...");
       var metaUrl = "https://api.themoviedb.org/3/" + type + "/" + tmdbId + "?api_key=" + TMDB_API_KEY;
+      console.log("[UHDMovies] TMDB URL: " + metaUrl);
+      
       var metaRes = yield safeFetch(metaUrl);
       
       if (metaRes && metaRes.ok) {
         var metaData = yield metaRes.json();
+        console.log("[UHDMovies] TMDB Response received");
+        
         if (metaData) {
           title = metaData.name || metaData.original_name || metaData.title || metaData.original_title || "";
-          console.log("[UHDMovies] Found title from TMDB API: " + title);
+          console.log("[UHDMovies] ✓ Found title: '" + title + "'");
         }
+      } else {
+        console.log("[UHDMovies] ✗ TMDB API failed: " + (metaRes ? metaRes.status : "No response"));
       }
       
       if (!title) {
-        console.log("[UHDMovies] Could not fetch title from TMDB, aborting.");
+        console.log("[UHDMovies] ✗ Could not fetch title from TMDB, aborting.");
         return [];
       }
 
       // 2. البحث في multishows.top
+      console.log("[UHDMovies] Step 2: Searching multishows.top...");
       var searchUrl = "https://multishows.top/?s=" + encodeURIComponent(title);
-      console.log("[UHDMovies] Searching: " + searchUrl);
+      console.log("[UHDMovies] Search URL: " + searchUrl);
       
       var response = yield safeFetch(searchUrl);
       
       if (!response || !response.ok) {
-        console.log("[UHDMovies] Search failed. Status: " + (response ? response.status : "No Response"));
+        console.log("[UHDMovies] ✗ Search failed. Status: " + (response ? response.status : "No Response"));
         return [];
       }
       
+      console.log("[UHDMovies] ✓ Search successful");
       var html = yield response.text();
+      console.log("[UHDMovies] Search page size: " + html.length + " bytes");
       
-      // 3. استخراج روابط المحتوى (مسلسلات أو أفلام) مع التحقق من التطابق
+      // 3. استخراج روابط المحتوى مع التحقق من التطابق
+      console.log("[UHDMovies] Step 3: Extracting content links...");
       var contentPattern = type === "tv" 
         ? /<a[^>]+href=["'](https?:\/\/multishows\.top\/tv-show\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
         : /<a[^>]+href=["'](https?:\/\/multishows\.top\/movie\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
       
+      var allMatches = [];
       var contentMatches = [];
       var match;
+      
       while ((match = contentPattern.exec(html)) !== null) {
         var linkText = match[2].replace(/<[^>]+>/g, '').trim();
+        allMatches.push({url: match[1], text: linkText});
         
-        // ✅ التحقق من أن النتيجة تطابق الاسم المطلوب
         if (titleMatches(title, linkText)) {
           contentMatches.push({url: match[1], text: linkText});
-          console.log("[UHDMovies] Found matching content: " + linkText);
+          console.log("[UHDMovies] ✓ MATCH: " + linkText);
         }
       }
       
-      console.log("[UHDMovies] Found " + contentMatches.length + " matching content links");
+      console.log("[UHDMovies] Total links found: " + allMatches.length);
+      console.log("[UHDMovies] Matching links: " + contentMatches.length);
+      
+      if (allMatches.length > 0 && allMatches.length <= 10) {
+        console.log("[UHDMovies] All links:");
+        for (var i = 0; i < allMatches.length; i++) {
+          console.log("[UHDMovies]   " + (i+1) + ". " + allMatches[i].text);
+        }
+      }
       
       if (contentMatches.length === 0) {
-        console.log("[UHDMovies] No matching content found for title: " + title);
-        return [];
+        console.log("[UHDMovies] ✗ No matching content found for title: '" + title + "'");
+        
+        // Fallback: إذا لم نجد مطابقة دقيقة، نأخذ أول نتيجة
+        if (allMatches.length > 0) {
+          console.log("[UHDMovies] Using fallback: first result");
+          contentMatches.push(allMatches[0]);
+        } else {
+          return [];
+        }
       }
       
       // اختيار أول نتيجة مطابقة
       var contentUrl = contentMatches[0].url;
-      console.log("[UHDMovies] Selected content: " + contentUrl);
+      console.log("[UHDMovies] ✓ Selected content: " + contentUrl);
       
       // 4. جلب صفحة المحتوى
+      console.log("[UHDMovies] Step 4: Fetching content page...");
       var contentRes = yield safeFetch(contentUrl);
       if (!contentRes || !contentRes.ok) {
-        console.log("[UHDMovies] Failed to fetch content page");
+        console.log("[UHDMovies] ✗ Failed to fetch content page");
         return [];
       }
       
+      console.log("[UHDMovies] ✓ Content page fetched");
       var contentHtml = yield contentRes.text();
       
       // 5. استخراج روابط الحلقات (للمسلسلات فقط)
       var episodeUrl = contentUrl;
       if (type === "tv") {
+        console.log("[UHDMovies] Step 5: Extracting episodes...");
         var episodePattern = /<a[^>]+href=["'](https?:\/\/multishows\.top\/episode\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
         var episodeMatches = [];
         while ((match = episodePattern.exec(contentHtml)) !== null) {
           episodeMatches.push({url: match[1], text: match[2]});
         }
         
-        console.log("[UHDMovies] Found " + episodeMatches.length + " episodes");
+        console.log("[UHDMovies] Episodes found: " + episodeMatches.length);
         
         if (episodeMatches.length === 0) {
-          console.log("[UHDMovies] No episodes found");
+          console.log("[UHDMovies] ✗ No episodes found");
           return [];
         }
         
@@ -301,19 +341,22 @@ function getStreams(tmdbId, mediaType, season, episode) {
         }
         
         episodeUrl = episodeMatches[episodeIndex].url;
-        console.log("[UHDMovies] Selected episode: " + episodeUrl);
+        console.log("[UHDMovies] ✓ Selected episode: " + episodeUrl);
       }
       
       // 6. جلب صفحة الحلقة أو الفيلم
+      console.log("[UHDMovies] Step 6: Fetching episode/movie page...");
       var episodeRes = yield safeFetch(episodeUrl);
       if (!episodeRes || !episodeRes.ok) {
-        console.log("[UHDMovies] Failed to fetch episode/movie page");
+        console.log("[UHDMovies] ✗ Failed to fetch episode/movie page");
         return [];
       }
       
+      console.log("[UHDMovies] ✓ Episode/movie page fetched");
       var episodeHtml = yield episodeRes.text();
       
       // 7. استخراج روابط المشاهدة والتحميل
+      console.log("[UHDMovies] Step 7: Extracting streams...");
       var streams = [];
       var seen = {};
       
@@ -335,6 +378,8 @@ function getStreams(tmdbId, mediaType, season, episode) {
         
         if (!is4K && !is1080 && !isMultiServer) continue;
 
+        console.log("[UHDMovies] Found stream: " + url.substring(0, 80) + "...");
+        
         var serverInfo = extractServerInfo(cleanContext);
         if (!serverInfo.quality && is4K) serverInfo.quality = "4K";
         if (!serverInfo.quality && is1080) serverInfo.quality = "1080P";
@@ -350,7 +395,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
         if (serverInfo.source) titleParts.push("• " + serverInfo.source);
         if (serverInfo.size) titleParts.push("[" + serverInfo.size + "]");
 
-        // سيرفرات المشاهدة المباشرة (Multi Server)
         if (isMultiServer) {
           streams.push({
             name: nameParts.join(" • "),
@@ -360,10 +404,10 @@ function getStreams(tmdbId, mediaType, season, episode) {
             _sizeRaw: parseSize(serverInfo.size),
             headers: { "User-Agent": UA, "Referer": "https://multishows.top/" }
           });
+          console.log("[UHDMovies] ✓ Added Multi Server stream");
         }
-        // روابط التحميل - نحتاج لفك تشفيرها
         else if ((is4K || is1080) && isDownload) {
-          console.log("[UHDMovies] Found download link, resolving...");
+          console.log("[UHDMovies] Resolving download link...");
           var directUrl = yield resolveDownloadLink(url);
           
           if (directUrl) {
@@ -375,13 +419,15 @@ function getStreams(tmdbId, mediaType, season, episode) {
               _sizeRaw: parseSize(serverInfo.size),
               headers: { "User-Agent": UA, "Referer": "https://multishows.top/" }
             });
+            console.log("[UHDMovies] ✓ Added resolved download stream");
           } else {
-            console.log("[UHDMovies] Could not resolve download link, skipping");
+            console.log("[UHDMovies] ✗ Could not resolve download link, skipping");
           }
         }
       }
 
       // 8. ترتيب النتائج
+      console.log("[UHDMovies] Step 8: Sorting streams...");
       streams.sort(function(a, b) {
         var qa = String(a.quality || "").toUpperCase();
         var qb = String(b.quality || "").toUpperCase();
@@ -397,7 +443,9 @@ function getStreams(tmdbId, mediaType, season, episode) {
         return s;
       });
 
+      console.log("[UHDMovies] ═══════════════════════════════════════════════════");
       console.log("[UHDMovies] === SUCCESS: Found " + streams.length + " streams in " + (Date.now() - t0) + "ms ===");
+      console.log("[UHDMovies] ═══════════════════════════════════════════════════");
       return streams;
       
     } catch (error) {
