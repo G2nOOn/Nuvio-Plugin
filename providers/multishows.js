@@ -1,5 +1,6 @@
 // ═════════════════════════════════════════════════════════════════════════════
-// Multishows/UHDMovies Scraper for Nuvio (Enhanced Debugging + Strict Matching)
+// Multishows/UHDMovies Scraper for Nuvio (Final Version with Accurate Matching)
+// Logic: TMDB API + multishows.top search + Accurate title matching + Download Link Resolver
 // ═════════════════════════════════════════════════════════════════════════════
 
 var __async = (__this, __arguments, generator) => {
@@ -15,7 +16,6 @@ var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
 function safeFetch(url, options) {
-  console.log("[UHDMovies] Fetching: " + url);
   return fetch(url, {
     ...options,
     headers: { 
@@ -24,11 +24,8 @@ function safeFetch(url, options) {
       ... (options ? options.headers : {}) 
     },
     timeout: 15000
-  }).then(response => {
-    console.log("[UHDMovies] Response: " + response.status + " for " + url);
-    return response;
   }).catch(e => { 
-    console.log("[UHDMovies] Fetch Error: " + e.message + " for " + url); 
+    console.log("[UHDMovies] Fetch Error: " + e.message); 
     return null; 
   });
 }
@@ -84,42 +81,57 @@ function resolveDownloadLink(downloadUrl) {
       var html = yield response.text();
       var directUrl = null;
       
+      // 1. HubCloud
       if (downloadUrl.includes('hubcloud') || downloadUrl.includes('gamerxyt')) {
         var match = html.match(/file_url['"]?\s*:\s*['"]([^'"]+)['"]/);
-        if (match) directUrl = match[1];
-        else {
+        if (match) {
+          directUrl = match[1];
+        } else {
           match = html.match(/<iframe[^>]+src=['"]([^'"]+)['"]/);
           if (match) directUrl = match[1];
         }
       }
+      
+      // 2. Streamtape
       else if (downloadUrl.includes('streamtape')) {
         var match = html.match(/getElementById\(['"]videolink['"]\)[^>]*>([^<]+)/);
-        if (match) directUrl = "https://streamtape.com/get_video?" + match[1];
-        else {
+        if (match) {
+          directUrl = "https://streamtape.com/get_video?" + match[1];
+        } else {
           match = html.match(/id=['"]videolink['"][^>]*>([^<]+)/);
           if (match) directUrl = "https://streamtape.com/get_video?" + match[1];
         }
       }
+      
+      // 3. Vidmoly
       else if (downloadUrl.includes('vidmoly')) {
         var match = html.match(/sources:\s*\[\{file:\s*['"]([^'"]+)['"]/);
-        if (match) directUrl = match[1];
-        else {
+        if (match) {
+          directUrl = match[1];
+        } else {
           match = html.match(/file:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/);
           if (match) directUrl = match[1];
         }
       }
+      
+      // 4. Earnvids
       else if (downloadUrl.includes('earnvids')) {
         var match = html.match(/file_url['"]?\s*:\s*['"]([^'"]+)['"]/);
         if (match) directUrl = match[1];
       }
+      
+      // 5. StreamHG
       else if (downloadUrl.includes('streamhg')) {
         var match = html.match(/sources:\s*\[\{file:\s*['"]([^'"]+)['"]/);
         if (match) directUrl = match[1];
       }
+      
+      // 6. Abyss أو روابط مباشرة
       else if (downloadUrl.includes('abyss') || downloadUrl.includes('.mp4') || downloadUrl.includes('.m3u8')) {
         directUrl = downloadUrl;
       }
       
+      // 7. محاولة عامة: البحث عن أي رابط فيديو
       if (!directUrl) {
         var match = html.match(/(https?:\/\/[^\s"']+\.mp4[^\s"']*)/);
         if (match) directUrl = match[1];
@@ -146,13 +158,13 @@ function resolveDownloadLink(downloadUrl) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// دالة مساعدة للتحقق من تطابق الأسماء (أكثر صرامة)
+// دالة مساعدة للتحقق من تطابق الأسماء (صارمة)
 // ═════════════════════════════════════════════════════════════════════════════
 
 function normalizeTitle(title) {
   return title.toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s]/g, '') // إزالة الرموز
+    .replace(/\s+/g, ' ') // توحيد المسافات
     .trim();
 }
 
@@ -162,7 +174,7 @@ function titleMatches(searchTitle, candidateTitle) {
   
   console.log("[UHDMovies] Comparing: '" + normalizedSearch + "' vs '" + normalizedCandidate + "'");
   
-  // التحقق من التطابق المباشر (الأكثر صرامة)
+  // التحقق من التطابق المباشر
   if (normalizedSearch === normalizedCandidate) {
     console.log("[UHDMovies] ✓ Exact match!");
     return true;
