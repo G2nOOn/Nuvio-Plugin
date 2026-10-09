@@ -1,6 +1,6 @@
 // ═════════════════════════════════════════════════════════════════════════════
-// Multishows/UHDMovies Scraper for Nuvio (Final Complete Version)
-// Logic: TMDB API + multishows.top search + Download Link Resolver
+// Multishows/UHDMovies Scraper for Nuvio (Final Complete Version with Accurate Matching)
+// Logic: TMDB API + multishows.top search + Accurate title matching + Download Link Resolver
 // ═════════════════════════════════════════════════════════════════════════════
 
 var __async = (__this, __arguments, generator) => {
@@ -158,6 +158,46 @@ function resolveDownloadLink(downloadUrl) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// دالة مساعدة للتحقق من تطابق الأسماء
+// ═════════════════════════════════════════════════════════════════════════════
+
+function normalizeTitle(title) {
+  return title.toLowerCase()
+    .replace(/[^\w\s]/g, '') // إزالة الرموز
+    .replace(/\s+/g, ' ') // توحيد المسافات
+    .trim();
+}
+
+function titleMatches(searchTitle, candidateTitle) {
+  var normalizedSearch = normalizeTitle(searchTitle);
+  var normalizedCandidate = normalizeTitle(candidateTitle);
+  
+  // التحقق من التطابق المباشر
+  if (normalizedCandidate.includes(normalizedSearch) || normalizedSearch.includes(normalizedCandidate)) {
+    return true;
+  }
+  
+  // التحقق من التطابق الجزئي (على الأقل 70% من الكلمات)
+  var searchWords = normalizedSearch.split(' ').filter(w => w.length > 2);
+  var candidateWords = normalizedCandidate.split(' ').filter(w => w.length > 2);
+  
+  if (searchWords.length === 0) return false;
+  
+  var matchCount = 0;
+  for (var i = 0; i < searchWords.length; i++) {
+    var word = searchWords[i];
+    for (var j = 0; j < candidateWords.length; j++) {
+      if (candidateWords[j].includes(word) || word.includes(candidateWords[j])) {
+        matchCount++;
+        break;
+      }
+    }
+  }
+  
+  return matchCount / searchWords.length >= 0.7;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // الدالة الرئيسية
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -190,6 +230,8 @@ function getStreams(tmdbId, mediaType, season, episode) {
 
       // 2. البحث في multishows.top
       var searchUrl = "https://multishows.top/?s=" + encodeURIComponent(title);
+      console.log("[UHDMovies] Searching: " + searchUrl);
+      
       var response = yield safeFetch(searchUrl);
       
       if (!response || !response.ok) {
@@ -199,7 +241,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       
       var html = yield response.text();
       
-      // 3. استخراج روابط المحتوى (مسلسلات أو أفلام)
+      // 3. استخراج روابط المحتوى (مسلسلات أو أفلام) مع التحقق من التطابق
       var contentPattern = type === "tv" 
         ? /<a[^>]+href=["'](https?:\/\/multishows\.top\/tv-show\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
         : /<a[^>]+href=["'](https?:\/\/multishows\.top\/movie\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
@@ -207,17 +249,23 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var contentMatches = [];
       var match;
       while ((match = contentPattern.exec(html)) !== null) {
-        contentMatches.push({url: match[1], text: match[2]});
+        var linkText = match[2].replace(/<[^>]+>/g, '').trim();
+        
+        // ✅ التحقق من أن النتيجة تطابق الاسم المطلوب
+        if (titleMatches(title, linkText)) {
+          contentMatches.push({url: match[1], text: linkText});
+          console.log("[UHDMovies] Found matching content: " + linkText);
+        }
       }
       
-      console.log("[UHDMovies] Found " + contentMatches.length + " content links");
+      console.log("[UHDMovies] Found " + contentMatches.length + " matching content links");
       
       if (contentMatches.length === 0) {
-        console.log("[UHDMovies] No content found in search results");
+        console.log("[UHDMovies] No matching content found for title: " + title);
         return [];
       }
       
-      // اختيار أول نتيجة
+      // اختيار أول نتيجة مطابقة
       var contentUrl = contentMatches[0].url;
       console.log("[UHDMovies] Selected content: " + contentUrl);
       
