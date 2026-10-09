@@ -42,9 +42,9 @@
       "contentLanguage": ["en"]
     },
     {
-      "id": "uhdmovies",
-      "name": "UHDmovies",
-      "description": "uhdmovies — krmz.onl | STRICT 1080p ONLY",
+      "id": "multishows",
+      "name": "Multishows",
+      "description": "multishows — krmz.onl | STRICT 1080p ONLY",
       "version": "0.6",
       "author": "G2nOOn",
       "supportedTypes": ["tv"],
