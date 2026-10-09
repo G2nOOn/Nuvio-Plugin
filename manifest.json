@@ -42,13 +42,13 @@
       "contentLanguage": ["en"]
     },
     {
-      "id": "multishows",
-      "name": "Multishows",
-      "description": "multishows — krmz.onl | STRICT 1080p ONLY",
+      "id": "testscraper",
+      "name": "testscraper",
+      "description": "testscraper — krmz.onl | STRICT 1080p ONLY",
       "version": "0.6",
       "author": "G2nOOn",
       "supportedTypes": ["tv"],
-      "filename": "providers/multishows.js",
+      "filename": "providers/testscraper.js",
       "enabled": true,
       "formats": ["m3u8"],
       "logo": "https://krmz.onl/favicon.ico",
