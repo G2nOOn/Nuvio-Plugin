@@ -136,7 +136,7 @@
       "id": "reanime",
       "name": "Reanime",
       "description": "Reanime via FlixCloud — STRICT 4K UHD & 1080p FHD ONLY. 4K prioritized over 1080p",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "G2nOOn",
       "supportedTypes": ["movie", "tv", "anime"],
       "filename": "providers/reanime.js",
