@@ -1,6 +1,6 @@
 {
   "name": "MultiProviders",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "scrapers": [
     {
       "id": "faselhd",
@@ -133,17 +133,17 @@
       "contentLanguage": ["en"]
     },
     {
-      "id": "vidnest",
-      "name": "Vidnest",
-      "description": "Vidnest via FlixHQ server — STRICT 4K UHD & 1080p FHD ONLY",
+      "id": "reanime",
+      "name": "Reanime",
+      "description": "Reanime via FlixCloud — STRICT 4K UHD & 1080p FHD ONLY. 4K prioritized over 1080p",
       "version": "1.0.0",
       "author": "G2nOOn",
-      "supportedTypes": ["movie", "tv"],
-      "filename": "providers/vidnest.js",
+      "supportedTypes": ["movie", "tv", "anime"],
+      "filename": "providers/reanime.js",
       "enabled": true,
-      "formats": ["m3u8"],
-      "logo": "https://vidnest.fun/favicon.ico",
-      "contentLanguage": ["en"]
+      "formats": ["mkv"],
+      "logo": "https://reanime.to/favicon.ico",
+      "contentLanguage": ["en", "ja"]
     }
   ]
 }
