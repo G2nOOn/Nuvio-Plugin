@@ -1,5 +1,6 @@
 // Reanime Scraper for Nuvio Local Scrapers
-// STRICT 4K UHD & 1080p FHD ONLY — 4K prioritized when available
+// JAPANESE (SUB) ONLY — STRICT 4K UHD & 1080p FHD
+// Dedupe by file size — same size = one, different = keep all
 
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -57,7 +58,7 @@ var __async = (__this, __arguments, generator) => {
   });
 };
 
-// ===== Quality gate =====
+// ===== Quality gate: 4K / 1080p ONLY =====
 function classifyQuality(rawStr) {
   if (rawStr === null || rawStr === undefined) return null;
   const q = String(rawStr).toUpperCase();
@@ -66,6 +67,9 @@ function classifyQuality(rawStr) {
   if (/\b(1080P?|FHD)\b/.test(q)) return '1080p';
   return null;
 }
+
+// ===== Config =====
+var LANGS_TO_FETCH = ["sub"];       // Japanese only
 
 function formatCholeCard(opt) {
   var raw = [opt.filename || "", opt.rawText || "", opt.server || "", opt.quality || "", opt.size || "", opt.title || ""].join(" ");
@@ -747,7 +751,7 @@ function getStreams(tmdbId, mediaType = "tv", season = null, episode = null) {
       const serversByLang = {};
       let watchUrl = "";
       if (alId) {
-        for (const lang of ["sub", "dub"]) {
+        for (const lang of LANGS_TO_FETCH) {
           try {
             const res = yield getFlixEmbeds(null, episodeNumber, lang, alId);
             if (res.servers && res.servers.length > 0) {
@@ -770,7 +774,7 @@ function getStreams(tmdbId, mediaType = "tv", season = null, episode = null) {
           if (anime) {
             const slug = anime.slug;
             const finalAlId = alId || anime.anilistId;
-            for (const lang of ["sub", "dub"]) {
+            for (const lang of LANGS_TO_FETCH) {
               try {
                 const res = yield getFlixEmbeds(slug, episodeNumber, lang, finalAlId);
                 if (res.servers && res.servers.length > 0) {
@@ -789,7 +793,7 @@ function getStreams(tmdbId, mediaType = "tv", season = null, episode = null) {
       const streams = [];
       const seen = /* @__PURE__ */ new Set();
       const tasks = [];
-      for (const language of ["sub", "dub"]) {
+      for (const language of LANGS_TO_FETCH) {
         const serverList = serversByLang[language] || [];
         for (let i = 0; i < serverList.length; i++) {
           const server = serverList[i];
@@ -804,10 +808,9 @@ function getStreams(tmdbId, mediaType = "tv", season = null, episode = null) {
               const directDl = yield extractFlixCloudDownload(dataLink);
               if (directDl && directDl.url) {
                 const qStr = directDl.quality || "1080p";
-                // ===== Quality gate: skip anything not 4k / 1080p =====
                 const qClass = classifyQuality(qStr);
                 if (!qClass) return null;
-                const langLabel = langUpper === "DUB" ? "English Dub" : "Japanese Sub";
+                const langLabel = "Japanese Sub";
                 const card = formatCholeCard({
                   provider: "Reanime",
                   title: displayTitle,
@@ -854,7 +857,21 @@ function getStreams(tmdbId, mediaType = "tv", season = null, episode = null) {
         const qb = qualityRank[(_b = b.quality) == null ? void 0 : _b.toLowerCase()] || 0;
         return qb - qa;
       });
-      return streams;
+
+      // ===== Dedupe by file size =====
+      // Same size → keep one (highest quality first — streams already sorted)
+      // Different size → keep all
+      const deduped = [];
+      const seenSizes = /* @__PURE__ */ new Set();
+      for (const stream of streams) {
+        const sizeKey = String(stream.size || "").trim().toUpperCase();
+        if (sizeKey && seenSizes.has(sizeKey)) {
+          continue;
+        }
+        if (sizeKey) seenSizes.add(sizeKey);
+        deduped.push(stream);
+      }
+      return deduped;
     } catch (error) {
       console.error(`[Reanime] Error: ${error.message}`);
       return [];
