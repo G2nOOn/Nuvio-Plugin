@@ -1,6 +1,6 @@
 {
   "name": "MultiProviders",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "scrapers": [
     {
       "id": "faselhd",
@@ -130,6 +130,19 @@
       "enabled": true,
       "formats": ["mp4", "m3u8", "dash"],
       "logo": "https://files.catbox.moe/4mdxz9.jpeg",
+      "contentLanguage": ["en"]
+    },
+    {
+      "id": "vidnest",
+      "name": "Vidnest",
+      "description": "Vidnest via FlixHQ server — STRICT 4K UHD & 1080p FHD ONLY",
+      "version": "1.0.0",
+      "author": "G2nOOn",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/vidnest.js",
+      "enabled": true,
+      "formats": ["m3u8"],
+      "logo": "https://vidnest.fun/favicon.ico",
       "contentLanguage": ["en"]
     }
   ]
