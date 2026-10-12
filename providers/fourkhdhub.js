@@ -212,14 +212,12 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     });
                 }
 
-                // Sort: PixelDrain first, then quality, then size
                 candidates.sort(function(a, b) {
                     if (a.prio !== b.prio) return b.prio - a.prio;
                     if (a.qRank !== b.qRank) return b.qRank - a.qRank;
                     return b.sizeMB - a.sizeMB;
                 });
 
-                // Dedupe by quality + size (PixelDrain wins because sorted first)
                 var deduped = [];
                 var seenKeys = {};
                 for (var j = 0; j < candidates.length; j++) {
@@ -230,7 +228,6 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     deduped.push(c);
                 }
 
-                // Final order: quality desc, size desc
                 deduped.sort(function(a, b) {
                     if (a.qRank !== b.qRank) return b.qRank - a.qRank;
                     return b.sizeMB - a.sizeMB;
