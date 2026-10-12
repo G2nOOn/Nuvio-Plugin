@@ -55,23 +55,41 @@ function getServerPriority(s) {
     return 10;
 }
 
+// Strip provider names that contain quality-like substrings (UHD, 4K)
+function getQualityText(s) {
+    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
+    txt = txt.replace(/UHDMoviesProvider/gi, "");
+    txt = txt.replace(/UHDMovies\s*CloudStream/gi, "");
+    txt = txt.replace(/UHDMovies/gi, "");
+    txt = txt.replace(/4KHDHub\s*CloudStream/gi, "");
+    txt = txt.replace(/4KHDHub/gi, "");
+    txt = txt.replace(/FourKHDHub\s*CloudStream/gi, "");
+    txt = txt.replace(/FourKHDHub/gi, "");
+    txt = txt.replace(/HDhub4u\s*CloudStream/gi, "");
+    txt = txt.replace(/HDhub4u/gi, "");
+    txt = txt.replace(/CloudStream/gi, "");
+    return txt;
+}
+
 function getQualityRank(s) {
-    var txt = ((s.name || "") + " " + (s.title || "") + " " + (s.description || "")).toUpperCase();
-    if (txt.indexOf("720") !== -1) return -1;
-    if (txt.indexOf("480") !== -1) return -1;
-    if (txt.indexOf("360") !== -1) return -1;
-    if (txt.indexOf("240") !== -1) return -1;
-    if (txt.indexOf("2160") !== -1) return 4;
-    if (txt.indexOf("4K") !== -1) return 4;
-    if (txt.indexOf("UHD") !== -1) return 4;
-    if (txt.indexOf("1080") !== -1) return 3;
-    if (txt.indexOf("FHD") !== -1) return 3;
+    var txt = getQualityText(s).toUpperCase();
+    if (/\b720P\b/.test(txt)) return -1;
+    if (/\b480P\b/.test(txt)) return -1;
+    if (/\b360P\b/.test(txt)) return -1;
+    if (/\b240P\b/.test(txt)) return -1;
+    if (/\b2160P\b/.test(txt)) return 4;
+    if (/\b4K\b/.test(txt)) return 4;
+    if (/\bUHD\b/.test(txt)) return 4;
+    if (/\b1080P\b/.test(txt)) return 3;
+    if (/\bFHD\b/.test(txt)) return 3;
     return -1;
 }
 
 function getQualityLabel(s) {
-    var txt = ((s.name || "") + " " + (s.title || "") + " " + (s.description || "")).toUpperCase();
-    if (txt.indexOf("2160") !== -1 || txt.indexOf("4K") !== -1 || txt.indexOf("UHD") !== -1) return "2160p";
+    var txt = getQualityText(s).toUpperCase();
+    if (/\b2160P\b/.test(txt)) return "2160p";
+    if (/\b4K\b/.test(txt)) return "2160p";
+    if (/\bUHD\b/.test(txt)) return "2160p";
     return "1080p";
 }
 
