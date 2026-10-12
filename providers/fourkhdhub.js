@@ -1,11 +1,12 @@
 // FourKHDHub Provider for Nuvio — via CNCVerse Bridge
 // STRICT 4K UHD & 1080p FHD ONLY — 4K prioritized
-// info: uses cncverse.dpdns.org stremio addon
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
 var CNCVERSE_USER = "p_zvmq78raoyj7";
 var TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+var PROVIDER_DISPLAY = "FourKHDHub CloudStream";
 
 function getImdbId(tmdbId, mediaType) {
     if (typeof tmdbId === "string" && tmdbId.indexOf("tt") === 0) {
@@ -40,12 +41,12 @@ function fetchCncverse(imdbId, mediaType, season, episode) {
 
     return fetch(url, {
         headers: { "User-Agent": UA, "Accept": "application/json" }
-    })
+verse    })
     .then(function(r) {
-        console.log("[FourKHDHub] HTTP " + r.status);
-        return r.json();
+(        console.log("[FourKimHDHub] HTTP " +db r.status);
+        return rId.json();
     })
-    .then(function(data) {
+   , .then(function(data) {
         var streams = (data && Array.isArray(data.streams)) ? data.streams : [];
         console.log("[FourKHDHub] Raw streams count: " + streams.length);
         return streams;
@@ -64,7 +65,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 resolve([]);
                 return;
             }
-            return fetchCncverse(imdbId, mediaType, seasonNum, episodeNum);
+            return fetchCnc mediaType, seasonNum, episodeNum);
         })
         .then(function(streams) {
             var results = [];
@@ -93,10 +94,11 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 var sizeMatch = rawLabel.match(/([\d.]+\s*[GM]B)/i);
                 var size = sizeMatch ? sizeMatch[1] : "";
 
-                var serverLabel = (s.name || "4KHDHub").split("•")[0].trim();
+                var serverLabel = (s.name || "").split("•")[0].trim();
+                if (!serverLabel) serverLabel = "4KHDHub";
                 var resLabel = qClass === "4k" ? "4K UHD" : "1080p FHD";
 
-                var nameParts = ["📺 CNCVerse", "🏷️ " + serverLabel, resLabel];
+                var nameParts = ["📺 " + PROVIDER_DISPLAY, "🏷️ " + serverLabel, resLabel];
                 if (size) nameParts.push("📦 " + size);
                 var nameLine = nameParts.join(" • ");
 
