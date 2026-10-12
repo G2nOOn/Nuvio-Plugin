@@ -1,5 +1,5 @@
 // FourKHDHub via CNCVerse Bridge - 4K & 1080p only
-// name = main header | title = addon details (no emojis)
+// Sort: qualityRank DESC (4K > 1080p), then size DESC within each group
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
 var CNCVERSE_USER = "p_zvmq78raoyj7";
@@ -8,18 +8,11 @@ var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, l
 var DISPLAY_NAME = "FourKHDHub CloudStream";
 
 function getImdbId(tmdbId, mediaType) {
-    if (typeof tmdbId === "string" && tmdbId.indexOf("tt") === 0) {
-        return Promise.resolve(tmdbId);
-    }
+    if (typeof tmdbId === "string" && tmdbId.indexOf("tt") === 0) return Promise.resolve(tmdbId);
     var endpoint = mediaType === "tv" ? "tv" : "movie";
     var url = "https://api.themoviedb.org/3/" + endpoint + "/" + tmdbId + "/external_ids?api_key=" + TMDB_API_KEY;
-    return fetch(url, { headers: { "User-Agent": UA } }).then(function(r) {
-        return r.json();
-    }).then(function(d) {
-        return d.imdb_id || null;
-    }).catch(function() {
-        return null;
-    });
+    return fetch(url, { headers: { "User-Agent": UA } }).then(function(r) { return r.json(); })
+        .then(function(d) { return d.imdb_id || null; }).catch(function() { return null; });
 }
 
 function classifyQuality(raw) {
@@ -35,6 +28,12 @@ function classifyQuality(raw) {
     if (q.indexOf("1080") !== -1) return "1080p";
     if (q.indexOf("FHD") !== -1) return "1080p";
     return null;
+}
+
+function qualityRank(qClass) {
+    if (qClass === "4k") return 4;
+    if (qClass === "1080p") return 3;
+    return 0;
 }
 
 function isPromo(s) {
@@ -73,14 +72,14 @@ function extractSizeStr(s) {
 function extractSizeMB(s) {
     var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
     var m = txt.match(/(\d+(?:\.\d+)?)\s*([KMGT]B)/i);
-    if (!m) return null;
+    if (!m) return 0;
     var value = parseFloat(m[1]);
     var unit = m[2].toUpperCase();
     var mb = value;
     if (unit === "KB") mb = value / 1024;
     else if (unit === "GB") mb = value * 1024;
     else if (unit === "TB") mb = value * 1024 * 1024;
-    return Math.round(mb * 100) / 100;
+    return Math.round(mb);
 }
 
 function stripEmojis(str) {
@@ -115,18 +114,17 @@ function cleanLine(str) {
     return out;
 }
 
-function buildHeader(qClass, sizeStr) {
+function buildFullName(qClass, sizeStr, s) {
     var resLabel = qClass === "4k" ? "4K UHD" : "1080p FHD";
-    var parts = [DISPLAY_NAME, resLabel];
-    if (sizeStr) parts.push(sizeStr);
-    return parts.join(" | ");
-}
+    var headerParts = [DISPLAY_NAME, resLabel];
+    if (sizeStr) headerParts.push(sizeStr);
+    var header = headerParts.join(" | ");
 
-function buildBody(s) {
-    var lines = [];
+    var lines = [header];
     var seen = {};
-    var fields = [s.name, s.title, s.description];
+    seen[header] = true;
 
+    var fields = [s.name, s.title, s.description];
     for (var f = 0; f < fields.length; f++) {
         var raw = fields[f];
         if (!raw) continue;
@@ -154,14 +152,12 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             id = imdbId + ":" + seasonNum + ":" + episodeNum;
         }
         var url = CNCVERSE_BASE + "/u/" + CNCVERSE_USER + "/stream/" + type + "/" + id + ".json";
-        return fetch(url, { headers: { "User-Agent": UA } }).then(function(r) {
-            return r.json();
-        }).then(function(data) {
+        return fetch(url, { headers: { "User-Agent": UA } }).then(function(r) { return r.json(); })
+        .then(function(data) {
             var streams = data && data.streams ? data.streams : [];
             var results = [];
             var seenUrls = {};
-            var i = 0;
-            for (i = 0; i < streams.length; i++) {
+            for (var i = 0; i < streams.length; i++) {
                 var s = streams[i];
                 if (isPromo(s)) continue;
                 if (isJunkStream(s)) continue;
@@ -174,13 +170,12 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 seenUrls[s.url] = true;
 
                 var sizeStr = extractSizeStr(s);
-                var header = buildHeader(qClass, sizeStr);
-                var body = buildBody(s);
+                var fullName = buildFullName(qClass, sizeStr, s);
 
                 var card = {
-                    name: header,
-                    title: body,
-                    description: body,
+                    name: fullName,
+                    title: fullName,
+                    description: fullName,
                     quality: qClass,
                     url: s.url
                 };
@@ -191,26 +186,28 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     card.headers = s.headers;
                 }
 
+                card._qRank = qualityRank(qClass);
                 card._sizeMB = extractSizeMB(s);
                 card._prio = serverPriority(s);
                 results.push(card);
             }
 
+            // Sort: qualityRank DESC, then sizeInMB DESC, then serverPriority DESC
             results.sort(function(a, b) {
-                var qa = a.quality === "4k" ? 2160 : 1080;
-                var qb = b.quality === "4k" ? 2160 : 1080;
-                if (qa !== qb) return qb - qa;
+                if (b._qRank !== a._qRank) return b._qRank - a._qRank;
+                if (b._sizeMB !== a._sizeMB) return b._sizeMB - a._sizeMB;
                 return (b._prio || 0) - (a._prio || 0);
             });
 
+            // Dedupe by quality + size
             var deduped = [];
-            var seenSizes = {};
-            var j = 0;
-            for (j = 0; j < results.length; j++) {
+            var seenKeys = {};
+            for (var j = 0; j < results.length; j++) {
                 var st = results[j];
-                var sizeKey = st._sizeMB;
-                if (sizeKey !== null && seenSizes[sizeKey]) continue;
-                if (sizeKey !== null) seenSizes[sizeKey] = true;
+                var key = st.quality + "::" + st._sizeMB;
+                if (seenKeys[key]) continue;
+                seenKeys[key] = true;
+                delete st._qRank;
                 delete st._sizeMB;
                 delete st._prio;
                 deduped.push(st);
@@ -218,9 +215,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
             return deduped;
         });
-    }).catch(function() {
-        return [];
-    });
+    }).catch(function() { return []; });
 }
 
 module.exports = { getStreams: getStreams };
