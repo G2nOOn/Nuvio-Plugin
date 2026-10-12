@@ -1,5 +1,5 @@
 // FourKHDHub CloudStream via CNCVerse Bridge
-// name = header | title/size/description = details (same as 4khdhub plugin)
+// Uses CNCVerse's OWN title/description AS-IS (just rebranded)
 // Filter: 4K & 1080p | Dedupe: PixelDrain priority | Sort: quality & size desc
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
@@ -7,7 +7,6 @@ var CNCVERSE_USER = "p_zvmq78raoyj7";
 var TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 var PROVIDER_NAME = "FourKHDHub CloudStream";
-var SITE_NAME = "4KHDHub.com";
 
 function getImdbId(tmdbId, mediaType) {
     if (typeof tmdbId === "string" && tmdbId.indexOf("tt") === 0) return Promise.resolve(tmdbId);
@@ -17,20 +16,6 @@ function getImdbId(tmdbId, mediaType) {
         .then(function(r) { return r.json(); })
         .then(function(d) { return d.imdb_id || null; })
         .catch(function() { return null; });
-}
-
-function getTmdbMeta(tmdbId, mediaType) {
-    var endpoint = mediaType === "tv" ? "tv" : "movie";
-    var url = "https://api.themoviedb.org/3/" + endpoint + "/" + tmdbId + "?api_key=" + TMDB_API_KEY;
-    return fetch(url, { headers: { "User-Agent": UA } })
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-            var title = mediaType === "tv" ? (d.name || d.original_name) : (d.title || d.original_title);
-            var date = mediaType === "tv" ? d.first_air_date : d.release_date;
-            var year = date ? date.substring(0, 4) : "";
-            return { title: title || "", year: year };
-        })
-        .catch(function() { return { title: "", year: "" }; });
 }
 
 function getInvertedSortTag(value, max) {
@@ -115,71 +100,47 @@ function getAudioType(s) {
     return "Single-Audio";
 }
 
-function getAudioCodec(s) {
-    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
-    var atmos = /\bATMOS\b/i.test(txt);
-    var suffix = atmos ? " • 🔊 Atmos" : "";
-    if (/\bTRUEHD\b/i.test(txt)) return "TrueHD" + suffix;
-    if (/\bDDP5\.1\b|\bDDP\s*5\.1\b|\bEAC3\b/i.test(txt)) return "DDP5.1" + suffix;
-    if (/\bDD5\.1\b|\bDD\s*5\.1\b|\bAC3\b/i.test(txt)) return "DD5.1" + suffix;
-    if (/\bDDP\b|\bDD\+\b/i.test(txt)) return "DDP5.1" + suffix;
-    if (/\bAAC\b/i.test(txt)) return "AAC" + suffix;
-    if (atmos) return "DDP5.1 • 🔊 Atmos";
-    return "DD5.1";
+// Clean invisible chars and rebrand
+function cleanLine(str) {
+    if (!str) return "";
+    var s = String(str).replace(/[\ufeff\u200b]/g, "");
+    s = s.replace(/CNCVerse/gi, "FourKHDHub CloudStream");
+    return s.trim();
 }
 
-function getHdr(s) {
-    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
-    if (/\bHDR10\+\b/i.test(txt)) return "HDR10+";
-    if (/\bDOLBY\s*VISION\b|\bDOVI\b|\bDV\b/i.test(txt)) return "DV";
-    return "HDR";
-}
+// Extract real details from CNCVerse, skipping the header line
+function extractRealDetails(s) {
+    var lines = [];
+    var sources = [s.title, s.description];
+    var picked = null;
 
-function getCodec(s) {
-    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
-    if (/\bH\.?265\b|\bHEVC\b|\bX265\b/i.test(txt)) return "H.265";
-    return "H.264";
-}
+    for (var f = 0; f < sources.length; f++) {
+        if (!sources[f]) continue;
+        var candidate = [];
+        var split = String(sources[f]).split("\n");
+        for (var i = 0; i < split.length; i++) {
+            var line = cleanLine(split[i]);
+            if (!line) continue;
+            // Skip CNCVerse branding header lines
+            if (/CNCVerse/i.test(line)) continue;
+            if (/^FourKHDHub CloudStream\s*\|/i.test(line)) continue;
+            if (/^FourKHDHub\s*$/i.test(line)) continue;
+            if (/^4KHDHub\s*$/i.test(line)) continue;
+            // Skip our own previously generated header (with |)
+            if (/^FourKHDHub CloudStream \|/i.test(line)) continue;
+            candidate.push(line);
+        }
+        if (candidate.length > 0) {
+            picked = candidate;
+            break;
+        }
+    }
 
-function getContainer(s) {
-    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
-    if (/\bMP4\b/i.test(txt)) return "MP4";
-    return "MKV";
-}
-
-function getSource(s) {
-    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
-    if (/\bBLURAY\b|\bBLU-RAY\b|\bBDRIP\b|\bBRRIP\b/i.test(txt)) return "BluRay";
-    if (/\bHDTV\b/i.test(txt)) return "HDTV";
-    return "WEB-DL";
-}
-
-function buildHeader(quality, sizeStr, audioType) {
-    return PROVIDER_NAME + " | " + quality + " | " + sizeStr + " | " + audioType;
-}
-
-function buildDetails(meta, item, episodeStr) {
-    var s = item.stream;
-    var quality = item.quality;
-    var sizeStr = item.sizeStr;
-
-    var titleLine = "🎬 " + meta.title + (meta.year ? " - (" + meta.year + ")" : "") + (episodeStr ? " | " + episodeStr : "");
-    var qEmoji = quality === "2160p" ? "⚡" : "🔥";
-    var line2 = qEmoji + " " + quality + " | 💾 " + sizeStr + " | 📼 " + getContainer(s);
-    var line3 = "🌈 " + getHdr(s) + " | 🎥 " + getCodec(s);
-    var line4 = "🌍 " + item.audioType + " | 🎧 " + getAudioCodec(s);
-    var line5 = "🎬 " + SITE_NAME + " 🗂️ " + getSource(s);
-
-    return [titleLine, line2, line3, line4, line5].join("\n");
+    return picked || [];
 }
 
 function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
-    return Promise.all([
-        getImdbId(tmdbId, mediaType),
-        getTmdbMeta(tmdbId, mediaType)
-    ]).then(function(results) {
-        var imdbId = results[0];
-        var meta = results[1];
+    return getImdbId(tmdbId, mediaType).then(function(imdbId) {
         if (!imdbId) return [];
 
         var type = mediaType === "tv" ? "series" : "movie";
@@ -237,27 +198,23 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     return b.sizeMB - a.sizeMB;
                 });
 
-                var episodeStr = "";
-                if (mediaType === "tv" && seasonNum && episodeNum) {
-                    episodeStr = "S" + String(seasonNum).padStart(2, "0") + "E" + String(episodeNum).padStart(2, "0");
-                }
-
                 var out = [];
                 for (var k = 0; k < deduped.length; k++) {
                     var item = deduped[k];
                     var s = item.stream;
 
-                    var header = buildHeader(item.quality, item.sizeStr, item.audioType);
-                    var details = buildDetails(meta, item, episodeStr);
+                    var header = PROVIDER_NAME + " | " + item.quality + " | " + item.sizeStr + " | " + item.audioType;
+                    var details = extractRealDetails(s);
+                    var detailsStr = details.length > 0 ? details.join("\n") : header;
 
                     var sortValue = item.qRank * 100000 + item.sizeMB;
                     var tag = getInvertedSortTag(sortValue, 999999);
 
                     var card = {
                         name: tag + header,
-                        title: details,
-                        size: details,
-                        description: details,
+                        title: detailsStr,
+                        size: detailsStr,
+                        description: detailsStr,
                         quality: item.qRank === 4 ? "4k" : "1080p",
                         url: s.url
                     };
