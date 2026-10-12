@@ -1,5 +1,5 @@
 // FourKHDHub via CNCVerse Bridge - 4K & 1080p only
-// Multi-line name, emojis stripped, addon info passed through
+// name = main header | title = addon details (no emojis)
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
 var CNCVERSE_USER = "p_zvmq78raoyj7";
@@ -63,7 +63,14 @@ function serverPriority(s) {
     return 10;
 }
 
-function extractSize(s) {
+function extractSizeStr(s) {
+    var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
+    var m = txt.match(/(\d+(?:\.\d+)?)\s*([KMGT]B)/i);
+    if (!m) return null;
+    return m[1] + " " + m[2].toUpperCase();
+}
+
+function extractSizeMB(s) {
     var txt = (s.name || "") + " " + (s.title || "") + " " + (s.description || "");
     var m = txt.match(/(\d+(?:\.\d+)?)\s*([KMGT]B)/i);
     if (!m) return null;
@@ -76,7 +83,6 @@ function extractSize(s) {
     return Math.round(mb * 100) / 100;
 }
 
-// Strip emojis via code-point ranges (no unicode regex flag needed)
 function stripEmojis(str) {
     if (!str) return "";
     var s = String(str);
@@ -84,15 +90,11 @@ function stripEmojis(str) {
     var i = 0;
     while (i < s.length) {
         var code = s.charCodeAt(i);
-        // Surrogate pairs (all emojis >= U+10000)
         if (code >= 0xD800 && code <= 0xDFFF) { i++; continue; }
-        // Misc symbols (☀ ☁ ⚡ ...)
-        if (code >= 0x2600 && code <= 0x26FF) { i++; continue; }
-        // Dingbats (✂ ✈ ✉ ...)
-        if (code >= 0x2700 && code <= 0x27BF) { i++; continue; }
-        // Variation selectors
+        if (code >= 0x2600 && code <= 0x27BF) { i++; continue; }
+        if (code >= 0x2300 && code <= 0x23FF) { i++; continue; }
+        if (code >= 0x2B00 && code <= 0x2BFF) { i++; continue; }
         if (code >= 0xFE00 && code <= 0xFE0F) { i++; continue; }
-        // Zero-width joiner
         if (code === 0x200D) { i++; continue; }
         out += s[i];
         i++;
@@ -100,24 +102,27 @@ function stripEmojis(str) {
     return out;
 }
 
-// Clean a single line: strip emojis, normalize " | " spacing, trim
-function cleanLine(str) {
+function rebrand(str) {
     if (!str) return "";
-    var out = stripEmojis(str);
+    return String(str).replace(/CNCVerse/gi, DISPLAY_NAME).replace(/CNC\s*Verse/gi, DISPLAY_NAME);
+}
+
+function cleanLine(str) {
+    var out = stripEmojis(rebrand(str));
     out = out.replace(/\s*\|\s*/g, " | ");
     out = out.replace(/\s{2,}/g, " ");
     out = out.replace(/^\s+|\s+$/g, "");
     return out;
 }
 
-// Rebrand CNCVerse -> our display name
-function rebrand(str) {
-    if (!str) return "";
-    return String(str).replace(/CNCVerse/gi, DISPLAY_NAME);
+function buildHeader(qClass, sizeStr) {
+    var resLabel = qClass === "4k" ? "4K UHD" : "1080p FHD";
+    var parts = [DISPLAY_NAME, resLabel];
+    if (sizeStr) parts.push(sizeStr);
+    return parts.join(" | ");
 }
 
-// Build the multiline name from the addon's fields
-function buildRichName(s) {
+function buildBody(s) {
     var lines = [];
     var seen = {};
     var fields = [s.name, s.title, s.description];
@@ -127,18 +132,14 @@ function buildRichName(s) {
         if (!raw) continue;
         var split = String(raw).split("\n");
         for (var j = 0; j < split.length; j++) {
-            var line = cleanLine(rebrand(split[j]));
+            var line = cleanLine(split[j]);
             if (!line) continue;
-            // skip header-only lines that just repeat display name
             if (line === DISPLAY_NAME) continue;
+            if (line === "1080p" || line === "4K" || line === "4K UHD" || line === "1080p FHD") continue;
             if (seen[line]) continue;
             seen[line] = true;
             lines.push(line);
         }
-    }
-
-    if (lines.length === 0) {
-        lines.push(DISPLAY_NAME);
     }
 
     return lines.join("\n");
@@ -172,12 +173,14 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
                 seenUrls[s.url] = true;
 
-                var richName = buildRichName(s);
+                var sizeStr = extractSizeStr(s);
+                var header = buildHeader(qClass, sizeStr);
+                var body = buildBody(s);
 
                 var card = {
-                    name: richName,
-                    title: richName,
-                    description: richName,
+                    name: header,
+                    title: body,
+                    description: body,
                     quality: qClass,
                     url: s.url
                 };
@@ -188,12 +191,11 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     card.headers = s.headers;
                 }
 
-                card._sizeMB = extractSize(s);
+                card._sizeMB = extractSizeMB(s);
                 card._prio = serverPriority(s);
                 results.push(card);
             }
 
-            // 4K first, then server priority (PixelDrain > FSL)
             results.sort(function(a, b) {
                 var qa = a.quality === "4k" ? 2160 : 1080;
                 var qb = b.quality === "4k" ? 2160 : 1080;
@@ -201,7 +203,6 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 return (b._prio || 0) - (a._prio || 0);
             });
 
-            // Dedupe by size
             var deduped = [];
             var seenSizes = {};
             var j = 0;
