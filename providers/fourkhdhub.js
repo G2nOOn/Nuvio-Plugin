@@ -1,11 +1,12 @@
 // FourKHDHub via CNCVerse Bridge - 4K & 1080p only
-// Prefers HubCloud [PixelDrain] over other HubCloud servers
-// Removes HubCloud [download] landing pages
+// Rich server info in name field (Nuvio only renders name)
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
 var CNCVERSE_USER = "p_zvmq78raoyj7";
 var TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+var DISPLAY_NAME = "FourKHDHub CloudStream";
 
 function getImdbId(tmdbId, mediaType) {
     if (typeof tmdbId === "string" && tmdbId.indexOf("tt") === 0) {
@@ -47,7 +48,6 @@ function isPromo(s) {
     return false;
 }
 
-// Remove HubCloud [download] landing pages
 function isJunkStream(s) {
     if (!s) return true;
     var txt = ((s.name || "") + " " + (s.title || "") + " " + (s.description || "")).toLowerCase();
@@ -57,7 +57,6 @@ function isJunkStream(s) {
     return false;
 }
 
-// Server priority - higher wins on tie (size collision)
 function serverPriority(s) {
     var txt = ((s.name || "") + " " + (s.title || "") + " " + (s.description || "")).toLowerCase();
     if (txt.indexOf("pixeldrain") !== -1) return 100;
@@ -77,6 +76,41 @@ function extractSize(s) {
     else if (unit === "GB") mb = value * 1024;
     else if (unit === "TB") mb = value * 1024 * 1024;
     return Math.round(mb * 100) / 100;
+}
+
+// Replace "CNCVerse" branding with our display name
+function rebrand(text) {
+    if (!text) return "";
+    return String(text).replace(/CNCVerse/gi, DISPLAY_NAME);
+}
+
+// Build a rich multi-line name string that Nuvio will show
+function buildRichName(s, qClass) {
+    var parts = [];
+
+    // 1. Header line - always our display name + quality
+    var resLabel = qClass === "4k" ? "4K UHD" : "1080p FHD";
+    parts.push(DISPLAY_NAME + " | " + resLabel);
+
+    // 2. Addon's title (has most details) - rebranded
+    var addonTitle = rebrand(s.title || "");
+    if (addonTitle && addonTitle !== parts[0]) {
+        parts.push(addonTitle);
+    }
+
+    // 3. Addon's description if different from title
+    var addonDesc = rebrand(s.description || "");
+    if (addonDesc && addonDesc !== addonTitle) {
+        parts.push(addonDesc);
+    }
+
+    // 4. Addon's name if different from what we have
+    var addonName = rebrand(s.name || "");
+    if (addonName && addonName.indexOf(addonTitle) === -1 && addonName.indexOf(DISPLAY_NAME) === -1) {
+        parts.push(addonName);
+    }
+
+    return parts.join("\n");
 }
 
 function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
@@ -107,10 +141,12 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
                 seenUrls[s.url] = true;
 
+                var richName = buildRichName(s, qClass);
+
                 var card = {
-                    name: s.name || "FourKHDHub CloudStream",
-                    title: s.title || s.name || "FourKHDHub CloudStream",
-                    description: s.description || s.title || s.name || "",
+                    name: richName,
+                    title: richName,
+                    description: richName,
                     quality: qClass,
                     url: s.url
                 };
@@ -126,7 +162,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 results.push(card);
             }
 
-            // Sort: quality (4K first), then server priority (PixelDrain > FSL > ...)
+            // 4K first, then by server priority (PixelDrain > FSL)
             results.sort(function(a, b) {
                 var qa = a.quality === "4k" ? 2160 : 1080;
                 var qb = b.quality === "4k" ? 2160 : 1080;
@@ -134,7 +170,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 return (b._prio || 0) - (a._prio || 0);
             });
 
-            // Dedupe by size - PixelDrain wins because it's sorted first
+            // Dedupe by size
             var deduped = [];
             var seenSizes = {};
             var j = 0;
