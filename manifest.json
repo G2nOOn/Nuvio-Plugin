@@ -1,6 +1,6 @@
 {
   "name": "MultiProviders",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "scrapers": [
     {
       "id": "faselhd",
@@ -179,6 +179,19 @@
       "author": "G2nOOn",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/hdhub4u.js",
+      "enabled": true,
+      "formats": ["mkv", "mp4"],
+      "logo": "",
+      "contentLanguage": ["en", "hi"]
+    },
+    {
+      "id": "uhdmovies",
+      "name": "UHDMovies CloudStream",
+      "description": "UHDMovies via CNCVerse Bridge — STRICT 4K UHD & 1080p FHD ONLY. 4K prioritized",
+      "version": "1.0.0",
+      "author": "G2nOOn",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/uhdmovies.js",
       "enabled": true,
       "formats": ["mkv", "mp4"],
       "logo": "",
