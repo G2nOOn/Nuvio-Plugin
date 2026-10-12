@@ -162,7 +162,7 @@
       "id": "fourkhdhub",
       "name": "FourKHDHub CloudStream",
       "description": "FourKHDHub CloudStream via CNCVerse Bridge — STRICT 4K UHD & 1080p FHD ONLY. 4K prioritized",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "G2nOOn",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/fourkhdhub.js",
