@@ -1,7 +1,6 @@
 // FourKHDHub CloudStream via CNCVerse Bridge
-// Same format as original 4KHDHub plugin: header + multiline details
-// Filter: 4K & 1080p only | Dedupe: PixelDrain priority
-// Sort: quality desc, then size desc
+// name = header | title/size/description = details (same as 4khdhub plugin)
+// Filter: 4K & 1080p | Dedupe: PixelDrain priority | Sort: quality & size desc
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
 var CNCVERSE_USER = "p_zvmq78raoyj7";
@@ -159,13 +158,18 @@ function buildHeader(quality, sizeStr, audioType) {
     return PROVIDER_NAME + " | " + quality + " | " + sizeStr + " | " + audioType;
 }
 
-function buildDetails(meta, quality, sizeStr, s, episodeStr) {
+function buildDetails(meta, item, episodeStr) {
+    var s = item.stream;
+    var quality = item.quality;
+    var sizeStr = item.sizeStr;
+
     var titleLine = "🎬 " + meta.title + (meta.year ? " - (" + meta.year + ")" : "") + (episodeStr ? " | " + episodeStr : "");
     var qEmoji = quality === "2160p" ? "⚡" : "🔥";
     var line2 = qEmoji + " " + quality + " | 💾 " + sizeStr + " | 📼 " + getContainer(s);
     var line3 = "🌈 " + getHdr(s) + " | 🎥 " + getCodec(s);
-    var line4 = "🌍 " + getAudioType(s) + " | 🎧 " + getAudioCodec(s);
+    var line4 = "🌍 " + item.audioType + " | 🎧 " + getAudioCodec(s);
     var line5 = "🎬 " + SITE_NAME + " 🗂️ " + getSource(s);
+
     return [titleLine, line2, line3, line4, line5].join("\n");
 }
 
@@ -244,7 +248,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     var s = item.stream;
 
                     var header = buildHeader(item.quality, item.sizeStr, item.audioType);
-                    var details = buildDetails(meta, item.quality, item.sizeStr, s, episodeStr);
+                    var details = buildDetails(meta, item, episodeStr);
 
                     var sortValue = item.qRank * 100000 + item.sizeMB;
                     var tag = getInvertedSortTag(sortValue, 999999);
@@ -252,6 +256,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     var card = {
                         name: tag + header,
                         title: details,
+                        size: details,
                         description: details,
                         quality: item.qRank === 4 ? "4k" : "1080p",
                         url: s.url
