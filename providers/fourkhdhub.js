@@ -1,6 +1,7 @@
 // FourKHDHub CloudStream via CNCVerse Bridge
-// Uses invisible char sort tag (like 4khdhub plugin) to force sort order
-// name = short header | title = multiline details
+// Keep: HubCloud [PixelDrain] preferred
+// Delete: HubCloud [FSL Server] when duplicate | HubCloud [download] always
+// name = header + invisible tag | title/size/description = details multiline
 
 var CNCVERSE_BASE = "https://cncverse.dpdns.org";
 var CNCVERSE_USER = "p_zvmq78raoyj7";
@@ -18,9 +19,6 @@ function getImdbId(tmdbId, mediaType) {
         .catch(function() { return null; });
 }
 
-// Invisible char sort tag (same as 4khdhub plugin)
-// \ufeff = BOM (higher), \u200b = zero-width space (lower)
-// Higher "value" => fewer BOM => sorts first
 function getInvertedSortTag(value, max) {
     max = max || 999999;
     var num = Math.max(0, parseInt(value, 10) || 0);
@@ -44,12 +42,20 @@ function isPromo(s) {
     return false;
 }
 
+// Delete HubCloud [download] landing pages
 function isJunkStream(s) {
     if (!s) return true;
     var txt = ((s.name || "") + " " + (s.title || "") + " " + (s.description || "")).toLowerCase();
     var hasHubcloud = txt.indexOf("hubcloud") !== -1;
     var hasDownload = txt.indexOf("[download]") !== -1 || txt.indexOf("download]") !== -1;
     return hasHubcloud && hasDownload;
+}
+
+// Server priority: PixelDrain (100) > others (10)
+function getServerPriority(s) {
+    var txt = ((s.name || "") + " " + (s.title || "") + " " + (s.description || "")).toLowerCase();
+    if (txt.indexOf("pixeldrain") !== -1) return 100;
+    return 10;
 }
 
 function getQualityRank(s) {
@@ -84,14 +90,11 @@ function getSizeStr(s) {
     return m[1] + m[2].toUpperCase();
 }
 
-// Strip invisible chars from CNCVerse's output
 function cleanInvisible(str) {
     if (!str) return "";
     return String(str).replace(/[\ufeff\u200b]/g, "");
 }
 
-// Extract just the details lines from CNCVerse title/description
-// Skip the "CNCVerse 📺 1080p • FourKHDHub" header line
 function buildDetailLines(s) {
     var out = [];
     var sources = [s.title, s.description];
@@ -101,12 +104,11 @@ function buildDetailLines(s) {
         for (var i = 0; i < lines.length; i++) {
             var line = cleanInvisible(lines[i]).trim();
             if (!line) continue;
-            // skip the CNCVerse header line
             if (/CNCVerse/i.test(line)) continue;
             if (/^FourKHDHub\s*$/i.test(line)) continue;
             out.push(line);
         }
-        if (out.length > 0) break; // prefer title, fallback to description
+        if (out.length > 0) break;
     }
     return out;
 }
@@ -132,9 +134,10 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 var raw = data && data.streams ? data.streams : [];
-                var results = [];
-                var seenUrls = {};
 
+                // Step 1: Filter + collect info
+                var candidates = [];
+                var seenUrls = {};
                 for (var i = 0; i < raw.length; i++) {
                     var s = raw[i];
                     if (isPromo(s)) continue;
@@ -148,29 +151,68 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     var sizeStr = getSizeStr(s);
                     var quality = qRank === 4 ? "2160p" : "1080p";
                     var audioType = getAudioType(s);
+                    var prio = getServerPriority(s);
 
-                    // Build header
-                    var header = PROVIDER_NAME + " | " + quality + " | " + sizeStr + " | " + audioType;
+                    candidates.push({
+                        stream: s,
+                        qRank: qRank,
+                        sizeMB: sizeMB,
+                        sizeStr: sizeStr,
+                        quality: quality,
+                        audioType: audioType,
+                        prio: prio
+                    });
+                }
 
-                    // Build sort tag: quality rank * 100000 + size in MB
-                    var sortValue = qRank * 100000 + sizeMB;
+                // Step 2: Sort - highest priority (PixelDrain) first, then quality, then size
+                candidates.sort(function(a, b) {
+                    if (a.prio !== b.prio) return b.prio - a.prio;
+                    if (a.qRank !== b.qRank) return b.qRank - a.qRank;
+                    return b.sizeMB - a.sizeMB;
+                });
+
+                // Step 3: Dedupe by quality + size - first (PixelDrain) wins
+                var deduped = [];
+                var seenKeys = {};
+                for (var j = 0; j < candidates.length; j++) {
+                    var c = candidates[j];
+                    var key = c.qRank + "::" + Math.round(c.sizeMB);
+                    if (seenKeys[key]) continue;
+                    seenKeys[key] = true;
+                    deduped.push(c);
+                }
+
+                // Step 4: Sort again by quality + size for final display order
+                deduped.sort(function(a, b) {
+                    if (a.qRank !== b.qRank) return b.qRank - a.qRank;
+                    return b.sizeMB - a.sizeMB;
+                });
+
+                // Step 5: Build output
+                var results = [];
+                for (var k = 0; k < deduped.length; k++) {
+                    var item = deduped[k];
+                    var s = item.stream;
+
+                    var header = PROVIDER_NAME + " | " + item.quality + " | " + item.sizeStr + " | " + item.audioType;
+                    var sortValue = item.qRank * 100000 + item.sizeMB;
                     var tag = getInvertedSortTag(sortValue, 999999);
 
-                    // Details multiline
                     var detailLines = buildDetailLines(s);
-                    var detailStr = detailLines.join("\n");
-                    if (!detailStr) detailStr = header;
+                    var detailStr = detailLines.length > 0 ? detailLines.join("\n") : header;
 
                     var card = {
                         name: tag + header,
                         title: detailStr,
                         description: detailStr,
-                        quality: qRank === 4 ? "4k" : "1080p",
+                        size: detailStr,
+                        quality: item.qRank === 4 ? "4k" : "1080p",
                         url: s.url
                     };
 
                     if (s.behaviorHints && s.behaviorHints.headers) {
                         card.headers = s.behaviorHints.headers;
+                        card.behaviorHints = s.behaviorHints;
                     } else if (s.headers) {
                         card.headers = s.headers;
                     }
