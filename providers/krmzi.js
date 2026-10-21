@@ -12,7 +12,6 @@
  *
  * 1080p ONLY: only streams whose detected quality is exactly "1080p" are
  * returned. Every other resolution is discarded. The language tag on each
- * returned stream is 🇮🇶 (Iraq).
  */
 
 "use strict";
